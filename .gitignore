@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行产物
+*.log
+output/
+outputs/
+data/
+
+# 系统文件
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
