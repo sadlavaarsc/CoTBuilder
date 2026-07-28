@@ -22,11 +22,15 @@
 ## 当前状态
 
 - `oldCode/CoTBuilder-V2.py`（857 行）— 从公司聊天软件 copy 的老版本，**仅作参考，不要修改**。由公司小模型生成，代码臃肿、功能不正常，且可能缺模块/有格式问题。
+- **重构已完成（2026-07-28）**：新代码位于 `cotbuilder/` 包（config / ratelimit / client / extractor / matcher / generator / writer / batch / cli），mock 与测试位于 `mock/`、`tests/`。设计决策与防误解清单见 `doc/design.md`。
+- **并发模型变更（用户确认）**：老代码的「MISMATCH 3 并发抽卡」已替换为**寿命模型**——样本内串行（同一样本在途请求恒 ≤ 1）、跨样本并发；`max_sample_attempts`（默认 3，MISMATCH 消耗）与 `network_max_attempts`（默认 5，网络/403 消耗）两本寿命账独立；MISMATCH 立即重排，网络错误退避（指数+jitter）到点才重排。
+- 测试基线：`python -m pytest tests/ -v`（全部 mock，不触真实 API，125 项指标测试 + 2 项 slow 冒烟，实测结果见 `doc/test-results.md`）。环境：`.venv`（uv 创建，依赖 aiohttp / pytest / pytest-asyncio，pip 源用清华镜像）。
+- **降级场景已测（2026-07-28，用户追加）**：网络断连/概率 403/服务端延迟抖动导致有效 QPM 略低于标称值时，系统不失态、不补发突发、错误正确分类（`tests/test_degraded.py`，仅验证表现，未实现补偿机制）。
 
-## 重构目标（待进行）
+## 重构目标（已达成）
 
-1. **更健壮**：修复老代码缺陷（见下方问题清单），消除隐性 bug
-2. **更简洁**：砍掉冗余抽象和重复代码，控制整体规模
+1. **更健壮**：老代码缺陷已修复（见下方问题清单的处置），全部指标有 mock 测试断言
+2. **更简洁**：按职责拆分 9 个模块，单模块单职责，结果字典单点构造
 3. **可测试**：用 **mock API 接口**完成指标测试（成功率、限流、重试、断点恢复等），不依赖真实模型服务
 
 ## 重构需求（正式版）
@@ -100,5 +104,9 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-cat oldCode/CoTBuilder-V2.py   # 参考实现
+cat oldCode/CoTBuilder-V2.py        # 参考实现（只读）
+cat doc/design.md                   # 设计文档（改并发/限流/匹配前必读 §5 防误解清单）
+cat doc/test-results.md             # 测试结果档案（实测指标与复现方法）
+ls cotbuilder/                      # 新代码包
+.venv/bin/python -m pytest tests/   # 跑全部指标测试
 ```

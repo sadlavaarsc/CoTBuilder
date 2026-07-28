@@ -1,0 +1,93 @@
+"""命令行入口：python -m cotbuilder.cli --input ... --output ...
+
+只负责参数解析、日志配置与 asyncio.run，不含任何业务逻辑。
+（老代码在构造函数里 basicConfig，import 即污染全局日志——已修正。）
+"""
+
+import argparse
+import asyncio
+import json
+import logging
+import random
+import sys
+from typing import Any, Dict, List, Optional
+
+from .batch import BatchRunner
+from .config import Config
+
+
+def load_samples(input_file: str,
+                 num_samples: Optional[int] = None) -> List[Dict[str, Any]]:
+    """加载样本数据；num_samples 采样时固定种子保证可复现（老代码语义）。"""
+    with open(input_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if num_samples and num_samples < len(data):
+        random.seed(42)
+        return random.sample(data, num_samples)
+    return data
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="CoT Data Generator (重构版)")
+    parser.add_argument("--input", required=True, help="输入样本 JSON 文件")
+    parser.add_argument("--output", required=True, help="输出目录")
+    parser.add_argument("--num-samples", type=int, default=None,
+                        help="采样数量（默认全部）")
+    parser.add_argument("--api-key", required=True, help="专家模型 API 密钥")
+    parser.add_argument("--api-endpoint",
+                        default="https://maasrd.hikvision.com.cn/v1",
+                        help="API 基础地址")
+    parser.add_argument("--model", default="Qwen3.6-35B-A3B-FP8",
+                        help="专家模型名称")
+    parser.add_argument("--qpm-limit", type=int, default=50,
+                        help="每分钟请求发起上限（含全部重试，匀速放行）")
+    parser.add_argument("--max-concurrent", type=int, default=10,
+                        help="在途 HTTP 请求硬上限")
+    parser.add_argument("--max-sample-attempts", type=int, default=3,
+                        help="样本寿命：MISMATCH 最大重试次数")
+    parser.add_argument("--network-max-attempts", type=int, default=5,
+                        help="网络寿命：网络/限流错误最大重试次数")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler("cot_generator.log", encoding="utf-8"),
+        ],
+    )
+
+    samples = load_samples(args.input, args.num_samples)
+    print(f"Loaded {len(samples)} samples from {args.input}")
+
+    config = Config(
+        api_key=args.api_key,
+        api_endpoint=args.api_endpoint,
+        model=args.model,
+        qpm_limit=args.qpm_limit,
+        max_concurrent=args.max_concurrent,
+        max_sample_attempts=args.max_sample_attempts,
+        network_max_attempts=args.network_max_attempts,
+    )
+
+    def progress(completed: int, total: int) -> None:
+        print(f"Progress: {completed}/{total} ({completed / total * 100:.1f}%)")
+
+    runner = BatchRunner(config)
+    result = asyncio.run(
+        runner.run(samples, args.output, progress_callback=progress))
+
+    print("\n" + "=" * 50)
+    print("CoT Generation Summary")
+    print("=" * 50)
+    print(f"Total samples: {result['total_samples']}")
+    print(f"Success: {result['success_count']}")
+    print(f"Failed: {result['failed_count']}")
+    print(f"Skipped: {result['skipped_count']}")
+    print(f"Success rate: {result['success_rate']:.2%}")
+    print("=" * 50)
+
+
+if __name__ == "__main__":
+    main()
