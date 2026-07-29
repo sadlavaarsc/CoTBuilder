@@ -194,3 +194,62 @@ C. 若 B 仍无效 → 回到 prompt 限制 thinking 长度（§2.3-a）与非�
 §五.3 一起入 Config + CLI + summary.config——否则上述 A/B 实验无法
 不改代码进行，且实验条件不可追溯（本次 32768 事件的同类教训）。
 
+### 2026-07-29（二）｜ 504 Gateway Timeout 的 rtt 高度统一在 ~360s
+
+用户实测观察：被分类为 API_ERROR 的 504 响应，rtt 全部统一在 360s 附近。
+
+#### 判定
+
+**网关超时阈值截断**（阈值 ≈ 360s），非随机瞬时故障。判据：瞬时 504 的
+rtt 应时长不一，阈值截断则恒定 ≈ 网关超时值。
+
+#### 推论
+
+1. **504 是 thinking 过长问题的极端尾部**，与 LENGTH_TRUNCATED 同根：
+   thinking 在 32768 token 内耗尽 → 230–316s 以 LENGTH_TRUNCATED 返回；
+   thinking 更久 → 撞 360s 网关墙 → 504。三个档位：
+   正常 OK（4–31s）→ LENGTH_TRUNCATED（230–316s）→ 504（360s）；
+2. **360s < request_timeout=600s**：客户端能收到 504 响应体（不是自己
+   超时），分类链路正常，问题只在「504 落进 API_ERROR 不重试」；
+3. **重试价值取决于 thinking 路径的发散性**：旧 temp=0.1 下 504 近乎
+   确定性（重试≈必撞墙）；官方档 temp=0.6 下重试有真实方差，换一条
+   thinking 轨迹可能在 360s 内跑完——重试有效性随采样参数修复而提升，
+   但单次重试成本最高 360s，代价不小；
+4. **正解仍是压 thinking**（同 §2.3）：把长尾拉回 360s 以内，504 与
+   LENGTH_TRUNCATED 会一起消失；若后续做「非思考 fallback 补枪」
+   （§2.3-d），504 与 LENGTH_TRUNCATED 应**共享同一条 fallback 路径**——
+   两者本质都是「thinking 太久导致响应没出来」，一头撞 token 墙、
+   一头撞网关墙。
+
+#### 决策（✅ 2026-07-29 已落地）
+
+GATEWAY_ERROR（502/503/504）独立分类 + 消耗 network_life 退避重试，
+单样本重试 ≤ `gateway_max_attempts`（默认 2，CLI `--gateway-max-attempts`）；
+同时落地：`request_timeout` 默认 600→**400s**（网关墙 360s + 40s 余量，
+低于 360s 会错杀合法长推理并破坏分类口径，见 design.md §5.16/17）、
+summary 新增 `quality` 块（match_score 均值 + 完成序每 10 个滑窗 +
+scored/unscored 计数，看平均 KV 质量而不只是完美样本）。
+- 落地后重点观察：采样参数 A/B 后 504 率是否随 thinking 变短而下降
+  （预期：与 EMPTY 率同步下降）；GATEWAY_ERROR 的 rtt 是否持续钉在
+  360s（验证网关阈值是否固定）。
+
+### 2026-07-29（三）｜ 输出速率实测与 request_timeout 合理区间
+
+用户实测：p50 rtt ≈ 30s；手动测试 6000 token 纯输出仅 ~15s
+（≈400 token/s）。
+
+#### 推论：request_timeout 600s 过长，应缩短到「网关墙 + 余量」
+
+1. **360s 网关墙是响应时长的真实上界**：超过 360s 的请求已被网关
+   杀死（504），客户端等 600s 毫无意义——多等的 240s 全是死时间；
+2. **但不能低于 360s**：合法响应可以跑到 ~359s（thinking 在 token 墙
+   前完成、但超过网关墙前的任何时刻）。客户端超时 < 360s 会把这些
+   响应掐成 NETWORK_ERROR，既错杀又破坏分类（504 的 GATEWAY_ERROR
+   语义更优——可分类、可分别决策重试）；
+3. **合理默认值 ≈ 400s**（网关墙 360s + 40s 余量：32768 token 响应体
+   传输 + 网关自身抖动）。搭配：真连接故障仍由 connect_timeout=15s
+   快速失败；输出速率 400 token/s 意味着即使顶满 32768 token，
+   纯生成也仅 ~82s，时长大头是 thinking 等待而非传输；
+4. 待验证：360s 网关阈值是网关固定配置还是随负载浮动——跑批时
+   观察 GATEWAY_ERROR 的 rtt 是否持续钉在 360s。
+

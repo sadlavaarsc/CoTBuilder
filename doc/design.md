@@ -89,6 +89,7 @@ batch → metrics（创建并注入 client / generator；它们独立构造时 m
 | 条件 | 分类 | 可重试 |
 |---|---|---|
 | 403 / 429 | RATE_LIMITED | ✓（尊重 Retry-After，与本地退避取 max） |
+| 502 / 503 / 504 | GATEWAY_ERROR | ✓（网络账退避，但单样本重试 ≤ gateway_max_attempts=2，见 §5.16） |
 | 其他 4xx/5xx | API_ERROR | ✗ |
 | 连接错误 / 超时 | NETWORK_ERROR | ✓ |
 | 200 但 content 为空且 finish_reason=length | LENGTH_TRUNCATED | ✗（thinking 耗尽预算，确定性失败，见 §5.4） |
@@ -184,7 +185,8 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     思考型模型（`enable_thinking=true`）推理可超过 2 分钟，
     `ClientTimeout(total=120)` 把正常慢推理掐成了大量 NETWORK_ERROR
     （时间戳算术验证：间隔 = 120s + 退避，严丝合缝）。现在
-    `request_timeout`（默认 600s）只约束总时长，`connect`/`sock_connect`
+    `request_timeout`（默认 400s，取值推导见 §5.17）只约束总时长，
+    `connect`/`sock_connect`
     （默认 15s）约束连接建立——真网络故障几秒内快速失败，不陪跑 600s。
     调小 request_timeout 前先确认模型推理延迟上限。
 13. **metrics.record 内禁止 await**：事件记录发生在 client 信号量持有
@@ -201,6 +203,17 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     重试近乎确定性。改默认值前先读 investigation 报告的 A/B 实验设计；
     「照抄原文」保真度由 STRICT 率护栏监控，不要为压重复直接把
     presence_penalty 拉到 1.5（那是通用档，精确任务档官方建议 0）。
+16. **GATEWAY_ERROR 为什么重试但要封顶**：502/503/504 是网关层故障，
+    与 NETWORK_ERROR 同族（瞬时基础设施问题，换时刻重试可能成功），
+    不该进 API_ERROR 等死。但实测 504 的 rtt 恒定 ≈360s——多为网关
+    超时阈值截断（thinking 极端长尾，与 LENGTH_TRUNCATED 同根），
+    满额 network_life 重试 = 单样本最多 30 分钟纯浪费。故走网络账
+    退避，同时单样本重试 ≤ `gateway_max_attempts`（默认 2）；官方档
+    temp=0.6 下 thinking 轨迹有方差，1–2 次重试是有真实胜率的小赌注。
+17. **request_timeout 必须大于网关超时墙**：实测网关墙 ≈360s，合法
+    响应最长可跑 ~359s。客户端超时 < 360s 会把它们掐成 NETWORK_ERROR，
+    既错杀又破坏 GATEWAY_ERROR 分类口径；默认 400s = 网关墙 + 40s
+    余量（响应体传输 + 网关抖动）。网关墙若调整，此值必须同步。
 
 ## 6. 内建指标（观测口径）
 
@@ -215,6 +228,12 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 | `max_per_sample_in_flight` | 单样本在途峰值 | 恒 ≤ 1（样本内串行） |
 | `amplification` | 请求放大倍数 = 总请求 / 处理样本数 | ≤ max_sample+network 寿命之和 |
 | `token_usage` | usage 累计：prompt/completion tokens + 有 usage 的响应数 | LENGTH_TRUNCATED 浪费的 completion_tokens 在此可见 |
+
+`summary.json` 另有 `quality` 块（平均 KV 质量，2026-07-29 新增）：
+`match_score_mean`（有 verdict 样本的 match_score 均值——看整体质量
+而不只是完美样本）、`samples_scored` / `samples_unscored`（网络/网关/
+空响应类失败无分数）、`match_score_mean_by_window`（按完成顺序每 10
+个样本一窗的均值，观察长跑中的质量漂移）。
 
 mock server 侧 `/_stats`：每请求到达时间戳（monotonic+wall）、outcome、
 `max_in_flight`（服务端视角的并发上限断言点）、`done_monotonic`

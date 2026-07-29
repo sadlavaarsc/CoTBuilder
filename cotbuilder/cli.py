@@ -47,10 +47,13 @@ def main() -> None:
                         help="样本寿命：MISMATCH 最大重试次数")
     parser.add_argument("--network-max-attempts", type=int, default=5,
                         help="网络寿命：网络/限流错误最大重试次数")
-    parser.add_argument("--request-timeout", type=float, default=600.0,
-                        help="单次请求总超时（秒）。思考型模型推理可超过 "
-                             "2 分钟，默认 600s；过短会把正常慢推理掐成 "
-                             "NETWORK_ERROR")
+    parser.add_argument("--gateway-max-attempts", type=int, default=2,
+                        help="网关错误（502/503/504）单样本重试上限"
+                             "（504 多为网关阈值截断，满额重试是浪费）")
+    parser.add_argument("--request-timeout", type=float, default=400.0,
+                        help="单次请求总超时（秒）。默认 400 = 网关超时墙"
+                             "（≈360s）+ 余量；合法响应最长可跑 ~359s，"
+                             "低于 360 会错杀长推理")
     parser.add_argument("--connect-timeout", type=float, default=15.0,
                         help="建立连接超时（秒），真网络故障快速失败")
     parser.add_argument("--max-tokens", type=int, default=32768,
@@ -93,6 +96,7 @@ def main() -> None:
         max_concurrent=args.max_concurrent,
         max_sample_attempts=args.max_sample_attempts,
         network_max_attempts=args.network_max_attempts,
+        gateway_max_attempts=args.gateway_max_attempts,
         request_timeout=args.request_timeout,
         connect_timeout=args.connect_timeout,
         max_tokens=args.max_tokens,

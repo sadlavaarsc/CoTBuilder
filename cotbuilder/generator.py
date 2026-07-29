@@ -9,6 +9,9 @@
   两本账互不挤占——403 风暴烧不掉样本质量重试的额度，反之亦然；
 - **排期**：MISMATCH 后立即重排（循环即重排，节奏交给限流器）；
   网络错误必须先退避（指数 + jitter）到点才能重排——「排期要求更高」；
+- **网关错误封顶**：GATEWAY_ERROR（502/503/504）走网络账退避重试，
+  但单样本重试次数另受 `gateway_max_attempts`（默认 2）封顶——
+  504 实测多为网关超时阈值截断（确定性长尾），满额重试是纯浪费；
 - **收尾**：全部尝试不通过时按 matcher.rank_key 选历史最优作为失败结果。
 
 「桶」的语义：限流器 + 并发槽的排队就是桶——每次重排都重新走
@@ -94,6 +97,7 @@ class SampleProcessor:
         sample_life = self._config.max_sample_attempts
         network_life = self._config.network_max_attempts
         network_retries = 0        # 退避索引（0 起）
+        gateway_retries = 0        # 网关错误单独计数（gateway_max_attempts 封顶）
         http_count = 0
         kind = "initial"           # 配额分账桶：首次 initial，之后按上次原因
         best = None                # 历史最优 (rank_key, content, response, pred, verdict)
@@ -128,11 +132,23 @@ class SampleProcessor:
                 last_error = "MISMATCH"
                 continue
 
-            if outcome.error in (ErrorType.NETWORK_ERROR, ErrorType.RATE_LIMITED):
-                # 网络/限流：消耗网络寿命，退避到点才重排（排期要求更高）
+            if outcome.error in (ErrorType.NETWORK_ERROR,
+                                 ErrorType.RATE_LIMITED,
+                                 ErrorType.GATEWAY_ERROR):
+                # 网络/限流/网关：消耗网络寿命，退避到点才重排（排期要求更高）
                 network_life -= 1
                 kind = "retry_network"
                 last_error = outcome.error.value
+                if outcome.error == ErrorType.GATEWAY_ERROR:
+                    gateway_retries += 1
+                    if gateway_retries > self._config.gateway_max_attempts:
+                        # 504 实测多为网关 360s 阈值截断（确定性长尾），
+                        # 满额 network_life 重试 = 单样本最多 30 分钟纯浪费；
+                        # 封顶后走最优收尾（有 best 按 MISMATCH，否则 GATEWAY_ERROR）
+                        logger.error(
+                            "Sample %s: gateway error persists (%d times), "
+                            "giving up", sample_id, gateway_retries)
+                        break
                 if network_life > 0:
                     delay = self._backoff.delay(network_retries)
                     if outcome.retry_after:

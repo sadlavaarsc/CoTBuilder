@@ -280,6 +280,40 @@ class TestSummaryObservability:
         for rec in result["results"]:
             assert rec["error_type"] == "LENGTH_TRUNCATED"
             assert rec["attempts"] == 1
+        # 无 verdict 的失败样本无分数：全部计入 unscored，均值为 None
+        summary = json.loads((tmp_path / "summary.json").read_text())
+        q = summary["quality"]
+        assert q["samples_scored"] == 0
+        assert q["samples_unscored"] == 4
+        assert q["match_score_mean"] is None
+
+    async def test_quality_report_mean_and_windows(self, tmp_path):
+        """quality 块：match_score 均值按完成序统计，含部分匹配样本
+        （看平均 KV 质量，不只是完美样本）。"""
+        def sample_with_gt(sid, gt_doc):
+            s = fixture_sample(sid)
+            s["messages"][1]["content"] = json.dumps(gt_doc,
+                                                     ensure_ascii=False)
+            return s
+
+        samples = [
+            fixture_sample("q0"),                    # STRICT，score 1.0
+            sample_with_gt("q1", MISMATCH_DOC),      # 6 叶子错 1 → score 5/6
+        ]
+        srv, runner, result, _ = await run_batch(
+            MockScenario(latency=(0.0, 0.0), seed=11, match_probability=1.0),
+            samples, tmp_path, qpm_limit=6000, max_sample_attempts=1)
+
+        summary = json.loads((tmp_path / "summary.json").read_text())
+        q = summary["quality"]
+        assert q["samples_scored"] == 2
+        assert q["samples_unscored"] == 0
+        expected = (1.0 + 5 / 6) / 2
+        assert q["match_score_mean"] == pytest.approx(expected, abs=1e-3)
+        # 完成序滑窗（窗口 10，样本不足时单窗 = 全局均值）
+        assert q["score_window_size"] == 10
+        assert q["match_score_mean_by_window"] == [
+            pytest.approx(expected, abs=1e-3)]
 
 
 class TestCompat:

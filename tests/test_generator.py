@@ -143,6 +143,35 @@ class TestLifeCycleSemantics:
         assert r["attempts"] == 1
 
 
+class TestGatewayError:
+    async def test_gateway_error_retried_then_success(self):
+        """GATEWAY_ERROR 走网络账退避重试（retry_network 桶）。"""
+        p = make_processor([err(ErrorType.GATEWAY_ERROR), ok(GT)])
+        r = await p.process(make_sample(), "s1")
+        assert r["status"] == "success"
+        assert r["attempts"] == 2
+        assert p._client.kinds == ["initial", "retry_network"]
+
+    async def test_gateway_retry_capped(self):
+        """504 重试受 gateway_max_attempts（默认 2）封顶：
+        1 次 initial + 2 次重试后放弃，不烧满 network_life。"""
+        p = make_processor([err(ErrorType.GATEWAY_ERROR) for _ in range(5)])
+        r = await p.process(make_sample(), "s1")
+        assert r["status"] == "failed"
+        assert r["error_type"] == "GATEWAY_ERROR"
+        assert r["attempts"] == 3          # 1 + 2 封顶，而非 network 寿命 5
+        assert p._client.kinds == ["initial"] + ["retry_network"] * 2
+
+    async def test_gateway_error_still_consumes_network_life(self):
+        """两个约束同时生效：network_life 先耗尽时按其收尾。"""
+        p = make_processor([err(ErrorType.GATEWAY_ERROR) for _ in range(3)],
+                           network_max_attempts=2, gateway_max_attempts=10)
+        r = await p.process(make_sample(), "s1")
+        assert r["status"] == "failed"
+        assert r["error_type"] == "GATEWAY_ERROR"
+        assert r["attempts"] == 2          # network_life=2 先耗尽
+
+
 class TestBestEffortFinalization:
     async def test_best_attempt_selected_on_exhaustion(self):
         """寿命耗尽：predicted_json == 历史最优（匹配字段数最多者）。"""

@@ -105,6 +105,12 @@ class TestErrorClassification:
         o = await self._one(MockScenario(latency=(0, 0), rate_limit_rate=1.0))
         assert o.error == ErrorType.RATE_LIMITED
 
+    async def test_gateway_error(self):
+        """502/503/504 → GATEWAY_ERROR（网关层故障，与 API_ERROR 分流）。"""
+        o = await self._one(MockScenario(latency=(0, 0),
+                                         gateway_error_rate=1.0))
+        assert o.error == ErrorType.GATEWAY_ERROR
+
     async def test_api_error_not_retryable(self):
         o = await self._one(MockScenario(latency=(0, 0), server_error_rate=1.0))
         assert o.error == ErrorType.API_ERROR

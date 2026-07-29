@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 class ErrorType(str, Enum):
     NETWORK_ERROR = "NETWORK_ERROR"      # 连接/超时，可重试
     RATE_LIMITED = "RATE_LIMITED"        # 403/429，可重试
+    GATEWAY_ERROR = "GATEWAY_ERROR"      # 502/503/504 网关层故障，可重试
+    # （退避 + gateway_max_attempts 封顶；504 多为网关超时截断，见 §3.3）
     API_ERROR = "API_ERROR"              # 其他 4xx/5xx，不重试
     EMPTY_RESPONSE = "EMPTY_RESPONSE"    # 200 但 content 为空（真空响应）
     LENGTH_TRUNCATED = "LENGTH_TRUNCATED"  # 200 但 content 为空且
@@ -253,6 +255,17 @@ class ExpertModelClient:
                         error=ErrorType.RATE_LIMITED,
                         retry_after=float(retry_after) if retry_after else None,
                     )
+
+                if resp.status in (502, 503, 504):
+                    # 网关层故障（上游过载/网关超时截断）：与 NETWORK_ERROR
+                    # 同族但单独立类——504 实测多为网关 360s 阈值截断，
+                    # 重试需 gateway_max_attempts 单独封顶（generator 侧）
+                    text = await resp.text()
+                    logger.warning("gateway error %s: %s",
+                                   resp.status, text[:200])
+                    self._record_outcome("GATEWAY_ERROR")
+                    return CallOutcome(ok=False,
+                                       error=ErrorType.GATEWAY_ERROR)
 
                 text = await resp.text()
                 logger.error("API error %s: %s", resp.status, text[:200])

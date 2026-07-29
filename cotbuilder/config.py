@@ -21,11 +21,16 @@ class Config:
         max_concurrent: 在途 HTTP 请求硬上限。
         max_sample_attempts: 样本寿命——单样本最多进队尝试次数（仅 MISMATCH 消耗）。
         network_max_attempts: 网络寿命——单样本网络/限流类错误的最大重试次数。
-        request_timeout: 单次 HTTP 请求总超时（秒），需大于模型推理延迟上限。
-            思考型模型（enable_thinking=true）推理可超过 2 分钟，默认 600s
-            （实测 120s 会把正常慢推理掐成 NETWORK_ERROR，见 design.md §7）。
+        request_timeout: 单次 HTTP 请求总超时（秒）。默认 400 = 网关超时墙
+            （实测 ≈360s）+ 40s 余量：合法响应最长可跑 ~359s，客户端超时
+            必须 > 360s 才不错杀；超过 360s 的请求已被网关 504，等更久
+            是死时间（推导见 doc/investigation-01-e2e-diagnosis.md 追加三）。
         connect_timeout: 建立连接的超时（秒）。连接失败快速失败，与慢推理
-            分离——真网络故障几秒内就能判死，无需陪跑 600s。
+            分离——真网络故障几秒内就能判死，无需陪跑 request_timeout。
+        gateway_max_attempts: 网关类错误（502/503/504）单样本重试上限。
+            504 实测多为网关 360s 阈值截断（确定性长尾），满额 network_life
+            重试 = 单样本最多 30 分钟纯浪费，故单独封顶（默认 2）；仍消耗
+            network_life，两约束同时生效。
         backoff_base: 退避基数（秒），第 n 次重试退避 min(base*2^n, cap)。
         backoff_cap: 退避上限（秒）。
         backoff_jitter: 退避抖动幅度，0.5 表示 ±50%，破坏多协程同步退避。
@@ -54,8 +59,9 @@ class Config:
     max_concurrent: int = 10
     max_sample_attempts: int = 3
     network_max_attempts: int = 5
-    request_timeout: float = 600.0
+    request_timeout: float = 400.0
     connect_timeout: float = 15.0
+    gateway_max_attempts: int = 2
     backoff_base: float = 5.0
     backoff_cap: float = 60.0
     backoff_jitter: float = 0.5

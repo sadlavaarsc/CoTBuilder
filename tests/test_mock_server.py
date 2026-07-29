@@ -54,6 +54,19 @@ class TestMockServer:
         assert statuses[:2] == [200, 200]
         assert statuses[2:] == [403, 403]
 
+    async def test_gateway_504(self):
+        """gateway_error_rate → 504（GATEWAY_ERROR 分类的测试基准）。"""
+        srv = MockExpertServer(MockScenario(
+            latency=(0.0, 0.0), seed=1, gateway_error_rate=1.0))
+        base = await srv.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                status, _ = await _post(base, session)
+        finally:
+            await srv.close()
+        assert status == 504
+        assert srv.stats.records[0].outcome == "gateway_504"
+
     async def test_deterministic_with_seed(self):
         """同 seed 两次运行，outcome 序列完全一致（并发等价性测试的基础）。"""
         async def run_once():

@@ -99,6 +99,8 @@ class MockScenario:
         network_error_rate: 直接断开连接（模拟网络错误）的概率。
         server_error_rate: 返回 500 的概率（API_ERROR，不重试）。
         rate_limit_rate: 概率性 403（含 qpm 文案）的概率。
+        gateway_error_rate: 返回 504 Gateway Timeout 的概率（网关超时阈值
+            截断建模；GATEWAY_ERROR 分类与封顶重试的测试基准）。
         empty_response_rate: 200 但 content 为空的概率（finish_reason=stop，
             真空响应）。
         length_truncated_rate: 200 但 content=null 且 finish_reason=length
@@ -123,6 +125,7 @@ class MockScenario:
     network_error_rate: float = 0.0
     server_error_rate: float = 0.0
     rate_limit_rate: float = 0.0
+    gateway_error_rate: float = 0.0
     empty_response_rate: float = 0.0
     length_truncated_rate: float = 0.0
     invalid_json_rate: float = 0.0
@@ -137,7 +140,8 @@ class RequestRecord:
     arrival_monotonic: float
     arrival_wall: float
     outcome: str          # ok_match / ok_normalized / ok_mismatch / network_cut /
-                          # server_500 / rate_limited / empty / invalid_json
+                          # server_500 / rate_limited / gateway_504 /
+                          # empty / length_truncated / invalid_json
     status: int
     done_monotonic: float = 0.0   # 响应完成时刻（服务端侧延迟可算）
 
@@ -199,6 +203,8 @@ class MockExpertServer:
             return "server_500"
         if r() < s.rate_limit_rate:
             return "rate_limited"
+        if r() < s.gateway_error_rate:
+            return "gateway_504"
         if r() < s.empty_response_rate:
             return "empty"
         if r() < s.length_truncated_rate:
@@ -274,8 +280,9 @@ class MockExpertServer:
             status, payload = self._render(outcome)
             self._record(seq, arrival_mono, outcome, status)
             if payload is None:
-                return web.Response(status=status,
-                                    text="qpm rate limit exceeded, 请求频率超限")
+                text = ("qpm rate limit exceeded, 请求频率超限"
+                        if status == 403 else f"Gateway Timeout ({status})")
+                return web.Response(status=status, text=text)
             return web.Response(
                 status=status,
                 content_type="application/json",
@@ -288,6 +295,8 @@ class MockExpertServer:
         """生成 (status, payload)。payload=None 表示纯文本错误响应。"""
         if outcome == "rate_limited":
             return 403, None
+        if outcome == "gateway_504":
+            return 504, None
         if outcome == "server_500":
             return 500, None
         # thinking 耗尽输出预算：content=null + finish_reason=length +

@@ -185,8 +185,32 @@ class BatchRunner:
             },
             # §6 GT 交叉验证离线分析（不影响主流程）
             "gt_analysis": self._matcher.aggregate(processor.verdicts),
+            # 平均 KV 质量（match_score 均值 + 完成序滑窗，看整体质量
+            # 而不只是完美样本；无 verdict 的失败样本计入 unscored）
+            "quality": self._quality_report(batch_result["results"]),
         }
         path = os.path.join(output_dir, "summary.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
         logger.info("Saved summary to %s", path)
+
+    @staticmethod
+    def _quality_report(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """match_score 均值 + 按完成顺序的滑窗均值（观察质量漂移）。
+
+        只有拿到 verdict 的样本有分数（成功 + MISMATCH 耗尽）；
+        网络/网关/空响应类失败无分数，计入 samples_unscored。
+        """
+        scores = [r["comparison_result"]["match_score"]
+                  for r in results if "comparison_result" in r]
+        window = 10
+        windows = [scores[i:i + window] for i in range(0, len(scores), window)]
+        return {
+            "match_score_mean": (
+                round(sum(scores) / len(scores), 4) if scores else None),
+            "samples_scored": len(scores),
+            "samples_unscored": len(results) - len(scores),
+            "score_window_size": window,
+            "match_score_mean_by_window": [
+                round(sum(w) / len(w), 4) for w in windows],
+        }
