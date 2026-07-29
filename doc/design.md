@@ -27,6 +27,7 @@ CoT 数据，与 Ground Truth（GT）比对验证后筛出匹配样本，作为�
 cli → batch → generator → {client, matcher, extractor, writer}
                   client → ratelimit
                   matcher → extractor
+batch → metrics（创建并注入 client / generator；它们独立构造时 metrics=None）
 ```
 
 | 模块 | 职责（只有这一个职责） | 关键类型 |
@@ -39,6 +40,7 @@ cli → batch → generator → {client, matcher, extractor, writer}
 | `generator.py` | 单样本寿命循环 | `SampleProcessor` |
 | `writer.py` | 实时落盘 + checkpoint | `ResultWriter` |
 | `batch.py` | 批量编排 + 指标汇总 | `BatchRunner` |
+| `metrics.py` | 性能追踪：四段耗时 / 有效 QPM 曲线 | `Metrics`、`MetricsEvent` |
 | `cli.py` | 参数解析入口 | `main()` |
 | `mock/mock_server.py` | 指标测试基准（非生产代码） | `MockExpertServer` |
 
@@ -168,6 +170,17 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 11. **writer 调用约束**：`save()` 只允许发生在 batch 的 as_completed 主
     循环（事件循环天然串行），因此 writer 无锁。若未来改成多线程/多循环
     写出，必须先给 writer 加锁。
+12. **超时拆分：total 管慢推理，connect 管真故障**：2026-07-29 实测，
+    思考型模型（`enable_thinking=true`）推理可超过 2 分钟，
+    `ClientTimeout(total=120)` 把正常慢推理掐成了大量 NETWORK_ERROR
+    （时间戳算术验证：间隔 = 120s + 退避，严丝合缝）。现在
+    `request_timeout`（默认 600s）只约束总时长，`connect`/`sock_connect`
+    （默认 15s）约束连接建立——真网络故障几秒内快速失败，不陪跑 600s。
+    调小 request_timeout 前先确认模型推理延迟上限。
+13. **metrics.record 内禁止 await**：事件记录发生在 client 信号量持有
+    期间（并发关键路径），任何挂起都可能引入新的耦合。事件先入内存
+    buffer，由 batch 主循环顺带 flush 落盘。同理，metrics 只观测、
+    不进任何决策路径；各模块独立构造时 metrics=None（零开销）。
 
 ## 6. 内建指标（观测口径）
 
@@ -183,7 +196,41 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 | `amplification` | 请求放大倍数 = 总请求 / 处理样本数 | ≤ max_sample+network 寿命之和 |
 
 mock server 侧 `/_stats`：每请求到达时间戳（monotonic+wall）、outcome、
-`max_in_flight`（服务端视角的并发上限断言点）。
+`max_in_flight`（服务端视角的并发上限断言点）、`done_monotonic`
+（响应完成时刻，服务端侧延迟可算）。
+
+## 6b. 性能追踪（metrics.py，2026-07-29 新增）
+
+背景：实测发现性能问题时，终态计数器无法回答「时间花在限流排队 / 槽位
+排队 / HTTP 飞行 / 退避哪一段」「有效 QPM 随时间的曲线」。本模块把每次
+请求拆成四段 monotonic 打点：
+
+```
+t0 → limiter.acquire() → t1 → semaphore 获取 → t2 → HTTP 完成 → t3
+     [wait_limiter]           [wait_slot]          [rtt]
+```
+
+- **事件流**：每请求一条 `{ts, sample_id, kind:"request", outcome,
+  quota_kind, wait_limiter, wait_slot, rtt}`；退避一条 `{kind:"backoff",
+  backoff}`。`record_*` 不 await（防误解 §5.13）。
+- **有效 QPM 口径**：HTTP 段起点（t2，限流放行 + 拿到槽位之后）按
+  `metrics_interval`（默认 10s）分桶，桶内发起数 × 60/interval。
+  这是「实际打到服务端的速率」，与限流器放行口径一致。
+- **落盘**：`output/metrics.jsonl`（每事件一行，batch 主循环每次
+  writer.save 时顺带增量 flush）。全新一轮（无 checkpoint）时先删旧文件；
+  断点续跑则继续追加。JSONL 追加写，无结果文件的就地数组问题。
+- **终态报告**：进 `summary.json` 的 `metrics.performance`：
+  `rtt_p50/p95/p99`、`phase_totals`/`phase_shares`（四段耗时总额与占比，
+  定位瓶颈段）、`effective_qpm_mean/min`、`buckets`（完整曲线）。
+- **控制台进度行**：reporter 协程按 `progress_log_interval`（默认 30s，
+  0=关）输出：`in_flight=8 eff_qpm=42.3 completed=17/100 rtt_p50=61s`。
+  in_flight 实时值只能来自 client.stats（metrics 只在请求完成时记事件）。
+- **接线**：`BatchRunner.__init__` 创建 Metrics 注入 client 与 processor；
+  各模块独立构造时 metrics=None，零开销零行为变化，保持可独立测试。
+
+典型排查路径：有效 QPM 曲线塌陷 → 看 phase_shares——wait_limiter 大是
+限流绑定（正常，qpm 配置即瓶颈）；wait_slot 大是并发不足；rtt 大是服务
+端慢；backoff 大是错误率高。配合 metrics.jsonl 逐事件可精确定位样本。
 
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 
@@ -209,6 +256,11 @@ mock 时间尺度策略：延迟默认 (30,90)s 贴近真实；测试把**时间
 测的是真实 asyncio 行为而非虚拟时钟。`deterministic_by_content=True` 时
 mock 按请求内容哈希分配命运，同一样本在任意并发交错下结果一致——
 「并发 vs 串行成功率精确相等」由此可断言。
+
+超长尾建模（2026-07-29 新增）：`slow_response_rate` + `slow_latency`
+（默认 (150,300)s）按概率让请求进入慢推理档，复现思考型模型的真实
+延迟长尾；`RequestRecord.done_monotonic` 记响应完成时刻。超时拆分
+（§5.12）的集成测试即基于此档。
 
 真实入口（连通专家模型服务后）：
 

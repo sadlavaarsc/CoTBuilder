@@ -21,11 +21,17 @@ class Config:
         max_concurrent: 在途 HTTP 请求硬上限。
         max_sample_attempts: 样本寿命——单样本最多进队尝试次数（仅 MISMATCH 消耗）。
         network_max_attempts: 网络寿命——单样本网络/限流类错误的最大重试次数。
-        request_timeout: 单次 HTTP 请求超时（秒），需大于模型推理延迟上限。
+        request_timeout: 单次 HTTP 请求总超时（秒），需大于模型推理延迟上限。
+            思考型模型（enable_thinking=true）推理可超过 2 分钟，默认 600s
+            （实测 120s 会把正常慢推理掐成 NETWORK_ERROR，见 design.md §7）。
+        connect_timeout: 建立连接的超时（秒）。连接失败快速失败，与慢推理
+            分离——真网络故障几秒内就能判死，无需陪跑 600s。
         backoff_base: 退避基数（秒），第 n 次重试退避 min(base*2^n, cap)。
         backoff_cap: 退避上限（秒）。
         backoff_jitter: 退避抖动幅度，0.5 表示 ±50%，破坏多协程同步退避。
         flush_every: writer 每追加多少条记录做一次全量原子重写（去重 + 规整）。
+        metrics_interval: 性能追踪滑动桶宽度（秒），有效 QPM 曲线的采样粒度。
+        progress_log_interval: 控制台进度行输出间隔（秒），0 = 关闭。
         matcher_legacy: True 时使用对齐原版 RobustJSONComparator 的宽松
             验收规则（大小写不敏感、数字逗号等价等），用于历史数据对账；
             默认 False（audit-02 规格）。逐项差异见 doc/comparator-compat.md。
@@ -38,9 +44,12 @@ class Config:
     max_concurrent: int = 10
     max_sample_attempts: int = 3
     network_max_attempts: int = 5
-    request_timeout: float = 120.0
+    request_timeout: float = 600.0
+    connect_timeout: float = 15.0
     backoff_base: float = 5.0
     backoff_cap: float = 60.0
     backoff_jitter: float = 0.5
     flush_every: int = 10
+    metrics_interval: float = 10.0
+    progress_log_interval: float = 30.0
     matcher_legacy: bool = False

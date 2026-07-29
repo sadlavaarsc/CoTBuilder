@@ -18,6 +18,7 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -25,6 +26,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from .config import Config
+from .metrics import Metrics
 from .ratelimit import PacedRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -74,17 +76,29 @@ class ExpertModelClient:
     Args:
         config: 运行配置。
         limiter: 匀速限流器（全实例共享一个，保证全局 QPM）。
+        metrics: 性能追踪（可选）。None 时零开销、零行为变化；
+            传入后 call() 内打四段 monotonic 点并记事件（metrics.py
+            的 record 不 await，不引入关键路径耦合）。
     """
 
-    def __init__(self, config: Config, limiter: PacedRateLimiter):
+    def __init__(self, config: Config, limiter: PacedRateLimiter,
+                 metrics: Optional[Metrics] = None):
         self._config = config
         self._limiter = limiter
+        self._metrics = metrics
         self._semaphore = asyncio.Semaphore(config.max_concurrent)
         self._session: Optional[aiohttp.ClientSession] = None
         self.stats = ClientStats()
 
     async def __aenter__(self):
-        timeout = aiohttp.ClientTimeout(total=self._config.request_timeout)
+        # 超时拆分（2026-07-29 实测修复）：total 管慢推理（思考型模型可
+        # 超过 2 分钟，120s 会把正常推理掐成 NETWORK_ERROR）；connect /
+        # sock_connect 管连接建立，真网络故障几秒内快速失败，不陪跑 total。
+        timeout = aiohttp.ClientTimeout(
+            total=self._config.request_timeout,
+            connect=self._config.connect_timeout,
+            sock_connect=self._config.connect_timeout,
+        )
         connector = aiohttp.TCPConnector(limit=self._config.max_concurrent)
         self._session = aiohttp.ClientSession(
             timeout=timeout, connector=connector)
@@ -114,16 +128,30 @@ class ExpertModelClient:
         Returns:
             CallOutcome；ok=True 时 response 与 content 非空。
         """
+        # 四段耗时的 t0（限流排队起点）；各段打点见下方注释
+        t0 = time.monotonic()
+
         # ① 限流放行：等待期间只挂起本协程，不占槽位
         await self._limiter.acquire()
+        t1 = time.monotonic()
 
         # ② 并发槽包裹完整 HTTP 生命周期
+        t2 = t1
         async with self._semaphore:
+            t2 = time.monotonic()
             self._track_start(sample_id, kind)
             try:
-                return await self._do_request(messages)
+                outcome = await self._do_request(messages)
             finally:
                 self._track_end(sample_id)
+
+        if self._metrics is not None:
+            self._metrics.record_request(
+                sample_id, kind,
+                outcome.error.value if outcome.error else "OK",
+                wait_limiter=t1 - t0, wait_slot=t2 - t1,
+                rtt=time.monotonic() - t2, started=t2)
+        return outcome
 
     # ------------------------------------------------------------------
 
@@ -150,6 +178,7 @@ class ExpertModelClient:
     async def _do_request(self, messages: list) -> CallOutcome:
         cfg = self._config
         assert self._session is not None, "client must be used as async context manager"
+        req_start = time.monotonic()
         try:
             async with self._session.post(
                 f"{cfg.api_endpoint}/chat/completions",
@@ -196,6 +225,10 @@ class ExpertModelClient:
                 return CallOutcome(ok=False, error=ErrorType.API_ERROR)
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning("network error: %s", e)
+            # 带异常类名 + 已耗时长：TimeoutError 的 str() 是空串，没有类名
+            # 根本无法区分「超时被掐」与「连接被拒」（2026-07-29 实测教训）
+            elapsed = time.monotonic() - req_start
+            logger.warning("network error (%s, elapsed %.1fs): %s",
+                           type(e).__name__, elapsed, e)
             self._record_outcome("NETWORK_ERROR")
             return CallOutcome(ok=False, error=ErrorType.NETWORK_ERROR)

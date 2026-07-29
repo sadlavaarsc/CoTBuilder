@@ -56,6 +56,10 @@ class ResultWriter:
         """样本是否已处理（断点恢复时跳过）。"""
         return sample_id in self.processed_ids
 
+    def is_processed_any(self) -> bool:
+        """是否有任何已处理样本（判断是否断点续跑）。"""
+        return bool(self.processed_ids)
+
     def _load_processed_ids(self) -> set:
         """优先读 checkpoint；丢失/损坏时从结果文件自愈重建。"""
         try:

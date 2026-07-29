@@ -60,13 +60,16 @@ class SampleProcessor:
         client: 专家模型客户端（单发 + 错误分类，不知道重试的存在）。
         matcher: 匹配器（验收判定与诊断共用）。
         config: 运行配置（寿命参数在此读取）。
+        metrics: 性能追踪（可选）。传入后退避 sleep 会记 backoff 事件
+            （metrics.record_backoff 不 await，不进关键路径决策）。
     """
 
     def __init__(self, client: ExpertModelClient, matcher: Matcher,
-                 config: Config):
+                 config: Config, metrics=None):
         self._client = client
         self._matcher = matcher
         self._config = config
+        self._metrics = metrics
         self._backoff = BackoffPolicy(
             base=config.backoff_base, cap=config.backoff_cap,
             jitter=config.backoff_jitter)
@@ -140,6 +143,8 @@ class SampleProcessor:
                         "(network life %d/%d)",
                         sample_id, outcome.error.value, delay,
                         network_life, self._config.network_max_attempts)
+                    if self._metrics is not None:
+                        self._metrics.record_backoff(sample_id, delay)
                     await asyncio.sleep(delay)
                 continue
 

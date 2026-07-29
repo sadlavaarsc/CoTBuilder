@@ -47,6 +47,12 @@ def main() -> None:
                         help="样本寿命：MISMATCH 最大重试次数")
     parser.add_argument("--network-max-attempts", type=int, default=5,
                         help="网络寿命：网络/限流错误最大重试次数")
+    parser.add_argument("--request-timeout", type=float, default=600.0,
+                        help="单次请求总超时（秒）。思考型模型推理可超过 "
+                             "2 分钟，默认 600s；过短会把正常慢推理掐成 "
+                             "NETWORK_ERROR")
+    parser.add_argument("--connect-timeout", type=float, default=15.0,
+                        help="建立连接超时（秒），真网络故障快速失败")
     parser.add_argument("--legacy-matcher", action="store_true",
                         help="使用对齐原版 RobustJSONComparator 的宽松验收"
                              "规则（历史数据对账用，默认 audit-02 规格）")
@@ -72,6 +78,8 @@ def main() -> None:
         max_concurrent=args.max_concurrent,
         max_sample_attempts=args.max_sample_attempts,
         network_max_attempts=args.network_max_attempts,
+        request_timeout=args.request_timeout,
+        connect_timeout=args.connect_timeout,
         matcher_legacy=args.legacy_matcher,
     )
 

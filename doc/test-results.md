@@ -3,12 +3,13 @@
 > 测试日期：2026-07-28 ｜ 环境：Python 3.12.9（`.venv`，uv 创建）、aiohttp 3.13.3、pytest 9.1.1、pytest-asyncio 1.4.0
 > 原则（CLAUDE.md 开发约定）：指标性能数据一律实际跑 mock 测试得出，不编造。本文所有数字均为真实运行输出。
 > 更新 2026-07-28：原版 comparator 对齐后新增 test_comparator_compat.py（46 项），总数 125 → **171**。
+> 更新 2026-07-29：超时拆分 + 性能追踪系统（metrics.py）落地，新增 test_metrics.py（16 项），总数 171 → **187**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **171 passed**，2 deselected | 39.5s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **187 passed**，2 deselected | 44.2s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 25.5s |
 
 分文件明细：
@@ -17,6 +18,7 @@
 |---|---|---|
 | test_matcher.py | 53 | 归一化正反例（audit-02 §7.1）、逐字段明细（§7.2）、判定一致性（§7.3）、三个永久回归用例（§7.4）、嵌套/类型、rank_key、aggregate |
 | test_comparator_compat.py | 46 | 原版 schema 完备性、legacy 与原版判定对齐（15 语料）、已知差异固化（7 案例）、extractor 单引号兜底 |
+| test_metrics.py | 16 | 桶聚合/percentile/有效 QPM/jsonl 往返/record 不 await、超时拆分（超长尾掐断/放足超时成功/连接快速失败）、metrics 接线（jsonl 四段齐全、summary performance 块、有效 QPM 上界、reporter 行） |
 | test_extractor.py | 12 | 直解/代码块/平衡括号嵌套提取/字符串内括号转义/垃圾文本 |
 | test_ratelimit.py | 12 | paced 间隔、任意 60s 窗 ≤ qpm、并发等待者等差放行、窗口指标、退避上下界/cap/jitter 方差 |
 | test_generator.py | 14 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类、结果字段兼容 |
@@ -26,7 +28,7 @@
 | test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
 | test_mock_server.py | 5 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **173** | |
+| **合计** | **189** | |
 
 ## 核心指标实测值
 
@@ -62,8 +64,27 @@
 - 混合小故障（断连 5% + 空响应 3% + 非法 JSON 3%）：30 样本全部落定，失败样本 error_type 均为已知类别
 - 说明：按当前需求**未实现**针对此类现象的补偿机制，仅验证系统不失态、不死锁、可恢复
 
-### 匹配器（audit-02 §7）
+### 超时拆分与性能追踪（2026-07-29 新增）
 
+背景：真实 API 实测发现 `ClientTimeout(total=120)` 把思考型模型的慢推理
+掐成大量 NETWORK_ERROR（间隔 = 120s + 退避，时间戳算术严丝合缝）。
+
+- **总超时掐断**：mock 超长尾档（slow_latency 2–3s 缩小尺度）+
+  `request_timeout=0.3` → NETWORK_ERROR，实测调用耗时 0.3s（断言
+  ±0.25s），日志含 `network error (TimeoutError, elapsed 0.3s)`
+  ——异常类名 + 耗时，区分超时与连接错误不再靠空消息猜
+- **超长尾修复回归**：slow_latency 0.4–0.6s + `request_timeout=5.0` →
+  请求成功，服务端实测延迟 ≥ 0.35s（done_monotonic 口径）
+- **连接快速失败**：连 127.0.0.1:1（必拒）+ `request_timeout=600,
+  connect_timeout=0.5` → NETWORK_ERROR，墙钟 < 5s（不陪跑 600s）
+- **metrics 接线**：8 样本批次后 metrics.jsonl 每请求事件含
+  wait_limiter/wait_slot/rtt 四段齐全（rtt 实测 ≥ 服务端延迟下界），
+  summary.json 的 `metrics.performance` 含 rtt 分位、四段占比（之和=1）、
+  有效 QPM 曲线（任意桶 ≤ 标称 +1 档容差）；reporter 按
+  `progress_log_interval=0.2` 实测输出 `in_flight=.. eff_qpm=..
+  completed=.. rtt_p50=..` 行，=0 时实测无输出
+
+### 匹配器（audit-02 §7）
 - 规格符合性：R-N1（全角字母/数字/符号、￥、U+3000、中文标点表）与 R-N2（标点前后空格、strip）逐条正反例通过；R-N3 规格外差异（大小写、缺 ¥、内部空格破坏、5.83 vs 5.830、™ 不经 NFKC 折叠）全部判 MISMATCH
 - 三个永久回归用例固化：`LAU` vs `Lau`、`¥5.83` vs `5.83`、`LAU, LAI LI` vs `LAU,LAIL I`
 - 判定一致性：结果中 `robust_match is comparison_result`（同一对象，消灭双实现）
@@ -78,7 +99,7 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-.venv/bin/python -m pytest tests/ -v            # 125 项指标测试（~40s）
+.venv/bin/python -m pytest tests/ -v            # 187 项指标测试（~44s）
 .venv/bin/python -m pytest tests/ -v -m slow    # 2 项近真实尺度冒烟（~26s）
 ```
 

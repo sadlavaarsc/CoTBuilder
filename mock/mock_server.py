@@ -85,7 +85,12 @@ class MockScenario:
     """mock 行为配置。所有概率为每请求独立判定（seeded）。
 
     Attributes:
-        latency: 单次请求延迟区间（秒），均匀随机。
+        latency: 单次请求延迟区间（秒），均匀随机。默认 (30,90) 为典型档，
+            贴近常规多模态推理延迟。
+        slow_response_rate: 请求进入「超长尾延迟档」的概率（默认 0）。
+            建模思考型模型（enable_thinking=true）的慢推理——实测真实 API
+            存在 >120s 的响应，曾把 120s 超时的客户端掐出大量 NETWORK_ERROR。
+        slow_latency: 超长尾档的延迟区间（秒），默认 (150, 300)。
         seed: 随机种子，None 则不设种子。
         match_probability: 返回「与 GT 一致」响应的概率；
             其余按 normalized_noise_probability 分流到归一化噪声/不匹配。
@@ -105,6 +110,8 @@ class MockScenario:
     """
 
     latency: Tuple[float, float] = (30.0, 90.0)
+    slow_response_rate: float = 0.0
+    slow_latency: Tuple[float, float] = (150.0, 300.0)
     seed: Optional[int] = 42
     match_probability: float = 1.0
     normalized_noise_probability: float = 0.0
@@ -126,6 +133,7 @@ class RequestRecord:
     outcome: str          # ok_match / ok_normalized / ok_mismatch / network_cut /
                           # server_500 / rate_limited / empty / invalid_json
     status: int
+    done_monotonic: float = 0.0   # 响应完成时刻（服务端侧延迟可算）
 
 
 @dataclass
@@ -240,8 +248,11 @@ class MockExpertServer:
                 self._record(seq, arrival_mono, outcome, 0)
                 return web.Response(status=599)  # 不可达，transport 已断
 
-            # 模拟推理延迟
-            await asyncio.sleep(self.rng.uniform(*s.latency))
+            # 模拟推理延迟：按概率进超长尾档（思考型模型慢推理建模）
+            latency_range = s.latency
+            if s.slow_response_rate > 0 and self.rng.random() < s.slow_response_rate:
+                latency_range = s.slow_latency
+            await asyncio.sleep(self.rng.uniform(*latency_range))
 
             status, payload = self._render(outcome)
             self._record(seq, arrival_mono, outcome, status)
@@ -282,6 +293,7 @@ class MockExpertServer:
             arrival_wall=time.time(),
             outcome=outcome,
             status=status,
+            done_monotonic=time.monotonic(),
         ))
 
     async def _handle_stats(self, request: web.Request) -> web.Response:
@@ -293,6 +305,7 @@ class MockExpertServer:
                     "seq": r.seq,
                     "arrival_monotonic": r.arrival_monotonic,
                     "arrival_wall": r.arrival_wall,
+                    "done_monotonic": r.done_monotonic,
                     "outcome": r.outcome,
                     "status": r.status,
                 }

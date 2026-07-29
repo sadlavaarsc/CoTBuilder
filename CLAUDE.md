@@ -1,7 +1,7 @@
 # CoTBuilder — CLAUDE.md
 
 > 创建于 2026-07-28 ｜ 用途：CoT 数据生产管线（用于模型后训练）
-> 更新于 2026-07-28 ｜ 补充重构需求与设计约束（含 P0 并发问题定位、mock 建模与文档要求）
+> 更新于 2026-07-29 ｜ 超时拆分（request 600s / connect 15s）+ metrics.py 性能追踪 + mock 超长尾建模
 
 ## 项目目标
 
@@ -22,9 +22,10 @@
 ## 当前状态
 
 - `oldCode/CoTBuilder-V2.py`（857 行）— 从公司聊天软件 copy 的老版本，**仅作参考，不要修改**。由公司小模型生成，代码臃肿、功能不正常，且可能缺模块/有格式问题。
-- **重构已完成（2026-07-28）**：新代码位于 `cotbuilder/` 包（config / ratelimit / client / extractor / matcher / generator / writer / batch / cli），mock 与测试位于 `mock/`、`tests/`。设计决策与防误解清单见 `doc/design.md`。
+- **重构已完成（2026-07-28）**：新代码位于 `cotbuilder/` 包（config / ratelimit / client / extractor / matcher / generator / writer / metrics / batch / cli），mock 与测试位于 `mock/`、`tests/`。设计决策与防误解清单见 `doc/design.md`。
 - **并发模型变更（用户确认）**：老代码的「MISMATCH 3 并发抽卡」已替换为**寿命模型**——样本内串行（同一样本在途请求恒 ≤ 1）、跨样本并发；`max_sample_attempts`（默认 3，MISMATCH 消耗）与 `network_max_attempts`（默认 5，网络/403 消耗）两本寿命账独立；MISMATCH 立即重排，网络错误退避（指数+jitter）到点才重排。
-- 测试基线：`python -m pytest tests/ -v`（全部 mock，不触真实 API，125 项指标测试 + 2 项 slow 冒烟，实测结果见 `doc/test-results.md`）。环境：`.venv`（uv 创建，依赖 aiohttp / pytest / pytest-asyncio，pip 源用清华镜像）。
+- 测试基线：`python -m pytest tests/ -v`（全部 mock，不触真实 API，187 项指标测试 + 2 项 slow 冒烟，实测结果见 `doc/test-results.md`）。环境：`.venv`（uv 创建，依赖 aiohttp / pytest / pytest-asyncio，pip 源用清华镜像）。
+- **超时拆分 + 性能追踪（2026-07-29）**：实测发现 `total=120` 超时把思考型模型慢推理掐成大量 NETWORK_ERROR——`request_timeout` 默认改 600s、新增 `connect_timeout`（默认 15s）让真网络故障快速失败；新增 `metrics.py` 四段耗时追踪（限流排队/槽位排队/HTTP 飞行/退避）+ 有效 QPM 曲线 + `output/metrics.jsonl` + 控制台进度行（设计见 `doc/design.md` §6b）；mock 新增超长尾延迟档（`slow_response_rate` / `slow_latency`）。
 - **降级场景已测（2026-07-28，用户追加）**：网络断连/概率 403/服务端延迟抖动导致有效 QPM 略低于标称值时，系统不失态、不补发突发、错误正确分类（`tests/test_degraded.py`，仅验证表现，未实现补偿机制）。
 - **原版 comparator 已对齐（2026-07-28）**：拿到缺失的 `oldCode/RobustJSONComparator.py`（只读）。原版宽松规则实现为 `MatcherConfig` 开关、默认关闭（默认 = audit-02 规格）；`Matcher.legacy()` / CLI `--legacy-matcher` 对齐原版行为；`comparison_result` schema 为原版超集。逐项对照与原版 4 个已修正 bug 见 `doc/comparator-compat.md`（改 matcher 前必读）。测试总数 173（171 + 2 slow）。
 
