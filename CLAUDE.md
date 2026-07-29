@@ -26,6 +26,7 @@
 - **并发模型变更（用户确认）**：老代码的「MISMATCH 3 并发抽卡」已替换为**寿命模型**——样本内串行（同一样本在途请求恒 ≤ 1）、跨样本并发；`max_sample_attempts`（默认 3，MISMATCH 消耗）与 `network_max_attempts`（默认 5，网络/403 消耗）两本寿命账独立；MISMATCH 立即重排，网络错误退避（指数+jitter）到点才重排。
 - 测试基线：`python -m pytest tests/ -v`（全部 mock，不触真实 API，125 项指标测试 + 2 项 slow 冒烟，实测结果见 `doc/test-results.md`）。环境：`.venv`（uv 创建，依赖 aiohttp / pytest / pytest-asyncio，pip 源用清华镜像）。
 - **降级场景已测（2026-07-28，用户追加）**：网络断连/概率 403/服务端延迟抖动导致有效 QPM 略低于标称值时，系统不失态、不补发突发、错误正确分类（`tests/test_degraded.py`，仅验证表现，未实现补偿机制）。
+- **原版 comparator 已对齐（2026-07-28）**：拿到缺失的 `oldCode/RobustJSONComparator.py`（只读）。原版宽松规则实现为 `MatcherConfig` 开关、默认关闭（默认 = audit-02 规格）；`Matcher.legacy()` / CLI `--legacy-matcher` 对齐原版行为；`comparison_result` schema 为原版超集。逐项对照与原版 4 个已修正 bug 见 `doc/comparator-compat.md`（改 matcher 前必读）。测试总数 173（171 + 2 slow）。
 
 ## 重构目标（已达成）
 

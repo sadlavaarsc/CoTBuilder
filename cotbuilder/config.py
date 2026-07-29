@@ -26,6 +26,9 @@ class Config:
         backoff_cap: 退避上限（秒）。
         backoff_jitter: 退避抖动幅度，0.5 表示 ±50%，破坏多协程同步退避。
         flush_every: writer 每追加多少条记录做一次全量原子重写（去重 + 规整）。
+        matcher_legacy: True 时使用对齐原版 RobustJSONComparator 的宽松
+            验收规则（大小写不敏感、数字逗号等价等），用于历史数据对账；
+            默认 False（audit-02 规格）。逐项差异见 doc/comparator-compat.md。
     """
 
     api_key: str
@@ -40,3 +43,4 @@ class Config:
     backoff_cap: float = 60.0
     backoff_jitter: float = 0.5
     flush_every: int = 10
+    matcher_legacy: bool = False

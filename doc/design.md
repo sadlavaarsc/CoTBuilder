@@ -96,7 +96,7 @@ cli → batch → generator → {client, matcher, extractor, writer}
 ### 4.1 归一化 N(text)——只做这些，其余即 bug
 
 1. 全角→半角受控映射：U+FF01–FF5E 减 0xFEE0；U+3000→空格；￥→¥、￡→£；
-   中文标点显式对照表（，：；？！（）【】""''、。等）；
+   中文标点显式对照表（，：；？！（）【】""''、。《》／等）；
 2. 删除紧邻标点**前后**的空白；首尾 strip；
 3. 其余位置空格一律保留。
 
@@ -106,6 +106,16 @@ cli → batch → generator → {client, matcher, extractor, writer}
 
 值类型规则：两端均 str 才走归一化；int/float 跨类型同值视为 STRICT
 （bool 除外）；其余类型严格相等。防 `str(None)=="None"` 假阳性。
+
+### 4.1b 与原版 RobustJSONComparator 的关系（2026-07-28 补齐）
+
+原版模块已拿到（`oldCode/`，只读）。其默认开启的宽松规则全部实现为
+`MatcherConfig` 开关、**默认关闭**（默认行为 = audit-02 规格）：
+`case_insensitive / collapse_internal_spaces / normalize_numeric_commas /
+unify_currency_extended / type_insensitive / trim_empty_fields`。
+`Matcher.legacy()`（CLI `--legacy-matcher`）全开对齐原版，用于历史数据
+对账。`comparison_result` schema 为原版返回结构的超集。逐项对照与原版的
+4 个已修正 bug 见 **doc/comparator-compat.md**（改 matcher 前必读）。
 
 ### 4.2 逐字段三级判定与验收口径
 

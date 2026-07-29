@@ -47,6 +47,9 @@ def main() -> None:
                         help="样本寿命：MISMATCH 最大重试次数")
     parser.add_argument("--network-max-attempts", type=int, default=5,
                         help="网络寿命：网络/限流错误最大重试次数")
+    parser.add_argument("--legacy-matcher", action="store_true",
+                        help="使用对齐原版 RobustJSONComparator 的宽松验收"
+                             "规则（历史数据对账用，默认 audit-02 规格）")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -69,6 +72,7 @@ def main() -> None:
         max_concurrent=args.max_concurrent,
         max_sample_attempts=args.max_sample_attempts,
         network_max_attempts=args.network_max_attempts,
+        matcher_legacy=args.legacy_matcher,
     )
 
     def progress(completed: int, total: int) -> None:

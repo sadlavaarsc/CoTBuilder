@@ -37,7 +37,7 @@ class BatchRunner:
 
     def __init__(self, config: Config):
         self._config = config
-        self._matcher = Matcher()
+        self._matcher = Matcher.legacy() if config.matcher_legacy else Matcher()
         self._limiter = PacedRateLimiter(config.qpm_limit)
         self._client = ExpertModelClient(config, self._limiter)
 

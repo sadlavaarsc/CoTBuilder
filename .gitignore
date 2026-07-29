@@ -17,3 +17,6 @@ data/
 # IDE
 .idea/
 .vscode/
+
+# vim
+*.swp

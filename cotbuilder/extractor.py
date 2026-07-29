@@ -5,13 +5,16 @@
 
 提取策略（按优先级）：
 1. 整体直接 json.loads；
-2. ```json 代码块中的第一个平衡 JSON 对象；
-3. 文本中第一个平衡花括号对象。
+2. ast.literal_eval 兜底（单引号 Python 风格字典，吸收自原版
+   RobustJSONComparator._parse_json）；
+3. ```json 代码块中的第一个平衡 JSON 对象；
+4. 文本中第一个平衡花括号对象。
 
-注意：老代码第 3 步用非贪婪正则 ``\\{.*?\\}``，遇到嵌套 JSON（单据明细行）
+注意：老代码最后一步用非贪婪正则 ``\\{.*?\\}``，遇到嵌套 JSON（单据明细行）
 必然截断，这里改为平衡括号扫描——这是有依据的行为修正，见 doc/design.md。
 """
 
+import ast
 import json
 import re
 from typing import Any, Optional
@@ -72,11 +75,20 @@ def extract_json(text: Optional[str]) -> Optional[dict]:
         return None
 
     # 1. 整体直解
-    result = _loads_obj(text.strip())
+    stripped = text.strip()
+    result = _loads_obj(stripped)
     if result is not None:
         return result
 
-    # 2. 代码块：取 ``` 标记之后的第一个平衡对象
+    # 2. 单引号 Python 风格字典兜底（ast.literal_eval 安全解析）
+    try:
+        value = ast.literal_eval(stripped)
+        if isinstance(value, dict):
+            return value
+    except (ValueError, SyntaxError, MemoryError):
+        pass
+
+    # 3. 代码块：取 ``` 标记之后的第一个平衡对象
     for m in _CODE_BLOCK_RE.finditer(text):
         brace = text.find("{", m.end())
         if brace == -1:
@@ -87,15 +99,22 @@ def extract_json(text: Optional[str]) -> Optional[dict]:
             if result is not None:
                 return result
 
-    # 3. 全文第一个平衡对象
+    # 4. 全文第一个平衡对象（含单引号变体）
     brace = text.find("{")
     while brace != -1:
         candidate = _scan_balanced(text, brace)
         if candidate:
             result = _loads_obj(candidate)
+            if result is None:
+                try:
+                    value = ast.literal_eval(candidate)
+                    if isinstance(value, dict):
+                        result = value
+                except (ValueError, SyntaxError, MemoryError):
+                    pass
             if result is not None:
                 return result
-            # 该对象解析失败（如含单引号），跳到其之后继续找
+            # 该对象解析失败，跳到其之后继续找
             brace = text.find("{", brace + len(candidate))
         else:
             brace = text.find("{", brace + 1)

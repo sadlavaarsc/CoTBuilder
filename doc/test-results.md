@@ -2,29 +2,31 @@
 
 > 测试日期：2026-07-28 ｜ 环境：Python 3.12.9（`.venv`，uv 创建）、aiohttp 3.13.3、pytest 9.1.1、pytest-asyncio 1.4.0
 > 原则（CLAUDE.md 开发约定）：指标性能数据一律实际跑 mock 测试得出，不编造。本文所有数字均为真实运行输出。
+> 更新 2026-07-28：原版 comparator 对齐后新增 test_comparator_compat.py（46 项），总数 125 → **171**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **125 passed**，2 deselected | 39.3s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **171 passed**，2 deselected | 39.5s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 25.5s |
 
 分文件明细：
 
-| 文件 | 通过数 | 耗时 | 覆盖 |
-|---|---|---|---|
-| test_matcher.py | 53 | 0.02s | 归一化正反例（audit-02 §7.1）、逐字段明细（§7.2）、判定一致性（§7.3）、三个永久回归用例（§7.4）、嵌套/类型、rank_key、aggregate |
-| test_extractor.py | 12 | 0.01s | 直解/代码块/平衡括号嵌套提取/字符串内括号转义/垃圾文本 |
-| test_ratelimit.py | 12 | 0.01s | paced 间隔、任意 60s 窗 ≤ qpm、并发等待者等差放行、窗口指标、退避上下界/cap/jitter 方差 |
-| test_generator.py | 14 | 0.08s | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类、结果字段兼容 |
-| test_writer.py | 8 | 0.03s | 逐次落盘文件恒合法、定期重写去重、checkpoint 恢复与自愈重建 |
-| test_client.py | 9 | 11.8s | 并发上限（服务端观测 max_in_flight）、限流饱和不占槽、1s 桶上界、错误分类、连接复用 |
-| test_batch.py | 7 | 17.4s | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容 |
-| test_degraded.py | 5 | 10.2s | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
-| test_mock_server.py | 5 | 0.1s | mock 自检：场景、观测端点、固定窗口 403、seed 确定性 |
-| test_smoke.py（slow） | 2 | 25.5s | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **127** | | |
+| 文件 | 通过数 | 覆盖 |
+|---|---|---|
+| test_matcher.py | 53 | 归一化正反例（audit-02 §7.1）、逐字段明细（§7.2）、判定一致性（§7.3）、三个永久回归用例（§7.4）、嵌套/类型、rank_key、aggregate |
+| test_comparator_compat.py | 46 | 原版 schema 完备性、legacy 与原版判定对齐（15 语料）、已知差异固化（7 案例）、extractor 单引号兜底 |
+| test_extractor.py | 12 | 直解/代码块/平衡括号嵌套提取/字符串内括号转义/垃圾文本 |
+| test_ratelimit.py | 12 | paced 间隔、任意 60s 窗 ≤ qpm、并发等待者等差放行、窗口指标、退避上下界/cap/jitter 方差 |
+| test_generator.py | 14 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类、结果字段兼容 |
+| test_writer.py | 8 | 逐次落盘文件恒合法、定期重写去重、checkpoint 恢复与自愈重建 |
+| test_client.py | 9 | 并发上限（服务端观测 max_in_flight）、限流饱和不占槽、1s 桶上界、错误分类、连接复用 |
+| test_batch.py | 7 | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容 |
+| test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
+| test_mock_server.py | 5 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性 |
+| test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
+| **合计** | **173** | |
 
 ## 核心指标实测值
 
