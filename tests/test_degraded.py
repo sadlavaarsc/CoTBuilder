@@ -101,7 +101,9 @@ class TestMixedDegradation:
                          match_probability=1.0,
                          network_error_rate=0.05,
                          empty_response_rate=0.03,
-                         invalid_json_rate=0.03),
+                         invalid_json_rate=0.03,
+                         # 空响应确定性走慢档，测试同步缩小时间常数
+                         slow_latency=(0.05, 0.15)),
             samples, tmp_path, qpm_limit=qpm, max_concurrent=conc,
             network_max_attempts=10)
 

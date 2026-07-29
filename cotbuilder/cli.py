@@ -53,6 +53,21 @@ def main() -> None:
                              "NETWORK_ERROR")
     parser.add_argument("--connect-timeout", type=float, default=15.0,
                         help="建立连接超时（秒），真网络故障快速失败")
+    parser.add_argument("--max-tokens", type=int, default=32768,
+                        help="输出 token 上限。32768 是服务端硬上限，"
+                             "调大无效（被静默钳制）")
+    parser.add_argument("--temperature", type=float, default=0.6,
+                        help="采样温度，默认官方思考·精确档 0.6")
+    parser.add_argument("--top-p", type=float, default=0.95,
+                        help=" nucleus sampling，默认官方档 0.95")
+    parser.add_argument("--top-k", type=int, default=20,
+                        help="top-k 采样，默认官方档 20")
+    parser.add_argument("--presence-penalty", type=float, default=0.0,
+                        help="存在惩罚（抗重复）。思考·通用档官方建议 1.5，"
+                             "死循环频发时可试")
+    parser.add_argument("--no-thinking", action="store_false",
+                        dest="enable_thinking",
+                        help="关闭思考模式（enable_thinking=false）")
     parser.add_argument("--legacy-matcher", action="store_true",
                         help="使用对齐原版 RobustJSONComparator 的宽松验收"
                              "规则（历史数据对账用，默认 audit-02 规格）")
@@ -80,6 +95,12 @@ def main() -> None:
         network_max_attempts=args.network_max_attempts,
         request_timeout=args.request_timeout,
         connect_timeout=args.connect_timeout,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        presence_penalty=args.presence_penalty,
+        enable_thinking=args.enable_thinking,
         matcher_legacy=args.legacy_matcher,
     )
 

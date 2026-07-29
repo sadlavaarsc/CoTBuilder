@@ -76,3 +76,44 @@ class TestMockServer:
         s2 = fixture_sample("s2", "conversations")
         assert s1["messages"][1]["content"]
         assert s2["conversations"][1]["value"]
+
+    async def test_length_truncated_response_shape(self):
+        """length_truncated outcome：content=null + finish_reason=length +
+        completion_tokens 顶满 32768（实测模式复刻）。"""
+        srv = MockExpertServer(MockScenario(
+            latency=(0.0, 0.0), slow_latency=(0.0, 0.0),
+            seed=1, length_truncated_rate=1.0))
+        base = await srv.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                status, payload = await _post(base, session)
+        finally:
+            await srv.close()
+        assert status == 200
+        choice = payload["choices"][0]
+        assert choice["message"]["content"] is None
+        assert choice["finish_reason"] == "length"
+        assert payload["usage"]["completion_tokens"] == 32768
+
+    async def test_empty_outcome_uses_slow_latency(self):
+        """慢=EMPTY 确定性绑定：empty outcome 走 slow_latency 档
+        （实测 thinking 耗尽响应 230–316s，典型档 4–31s）。"""
+        srv = MockExpertServer(MockScenario(
+            latency=(0.0, 0.0), slow_latency=(0.3, 0.4),
+            seed=1, empty_response_rate=1.0))
+        base = await srv.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                await _post(base, session)
+        finally:
+            await srv.close()
+        rec = srv.stats.records[0]
+        assert rec.outcome == "empty"
+        assert rec.done_monotonic - rec.arrival_monotonic >= 0.28
+
+    async def test_normal_outcome_has_finish_reason_stop(self, server):
+        srv, base = server
+        async with aiohttp.ClientSession() as session:
+            status, payload = await _post(base, session)
+        assert payload["choices"][0]["finish_reason"] == "stop"
+        assert "usage" in payload

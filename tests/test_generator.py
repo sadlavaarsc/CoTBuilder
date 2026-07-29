@@ -134,6 +134,14 @@ class TestLifeCycleSemantics:
         assert r["error_type"] == "EMPTY_RESPONSE"
         assert r["attempts"] == 1
 
+    async def test_length_truncated_fails_immediately(self):
+        """LENGTH_TRUNCATED（thinking 耗尽，确定性失败）同样不重试。"""
+        p = make_processor([err(ErrorType.LENGTH_TRUNCATED), ok(GT)])
+        r = await p.process(make_sample(), "s1")
+        assert r["status"] == "failed"
+        assert r["error_type"] == "LENGTH_TRUNCATED"
+        assert r["attempts"] == 1
+
 
 class TestBestEffortFinalization:
     async def test_best_attempt_selected_on_exhaustion(self):

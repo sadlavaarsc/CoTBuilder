@@ -30,6 +30,16 @@ class Config:
         backoff_cap: 退避上限（秒）。
         backoff_jitter: 退避抖动幅度，0.5 表示 ±50%，破坏多协程同步退避。
         flush_every: writer 每追加多少条记录做一次全量原子重写（去重 + 规整）。
+        max_tokens: 单次请求输出 token 上限。32768 是 Qwen3.6-35B 服务端
+            输出硬上限（实测发 65536 被静默钳制），调大无效；调小会让
+            thinking 更早耗尽预算导致 content=null（见
+            doc/investigation-01-e2e-diagnosis.md §2.2）。
+        temperature / top_p / top_k / presence_penalty: 采样参数。
+            默认 = Qwen3.6-35B 官方「思考模式·精确任务」档
+            （0.6 / 0.95 / 20 / 0）。原 temp=0.1 严重偏离官方建议，
+            是 thinking 死循环（43% EMPTY）的疑似诱因，并让重试近乎
+            确定性（同上报告，追加记录 2026-07-29）。
+        enable_thinking: 是否开启思考模式（chat_template_kwargs）。
         metrics_interval: 性能追踪滑动桶宽度（秒），有效 QPM 曲线的采样粒度。
         progress_log_interval: 控制台进度行输出间隔（秒），0 = 关闭。
         matcher_legacy: True 时使用对齐原版 RobustJSONComparator 的宽松
@@ -50,6 +60,12 @@ class Config:
     backoff_cap: float = 60.0
     backoff_jitter: float = 0.5
     flush_every: int = 10
+    max_tokens: int = 32768
+    temperature: float = 0.6
+    top_p: float = 0.95
+    top_k: int = 20
+    presence_penalty: float = 0.0
+    enable_thinking: bool = True
     metrics_interval: float = 10.0
     progress_log_interval: float = 30.0
     matcher_legacy: bool = False

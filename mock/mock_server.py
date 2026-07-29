@@ -85,12 +85,13 @@ class MockScenario:
     """mock 行为配置。所有概率为每请求独立判定（seeded）。
 
     Attributes:
-        latency: 单次请求延迟区间（秒），均匀随机。默认 (30,90) 为典型档，
-            贴近常规多模态推理延迟。
-        slow_response_rate: 请求进入「超长尾延迟档」的概率（默认 0）。
-            建模思考型模型（enable_thinking=true）的慢推理——实测真实 API
-            存在 >120s 的响应，曾把 120s 超时的客户端掐出大量 NETWORK_ERROR。
-        slow_latency: 超长尾档的延迟区间（秒），默认 (150, 300)。
+        latency: 单次请求延迟区间（秒），均匀随机。默认 (4,30) 为典型档——
+            实测真实 API 的 OK 请求分布 4–31s、p50≈10s（2026-07-29 e2e）。
+        slow_response_rate: 其他 outcome 附加超长尾延迟的概率（默认 0）。
+            独立旋钮，用于测试超时拆分等需要「慢但正常返回」的场景。
+        slow_latency: 超长尾档延迟区间（秒），默认 (230,320)——实测
+            thinking 耗尽响应 230–316s。empty / length_truncated outcome
+            **确定性**使用此档（实测慢=token 耗尽，二者强绑定）。
         seed: 随机种子，None 则不设种子。
         match_probability: 返回「与 GT 一致」响应的概率；
             其余按 normalized_noise_probability 分流到归一化噪声/不匹配。
@@ -98,7 +99,11 @@ class MockScenario:
         network_error_rate: 直接断开连接（模拟网络错误）的概率。
         server_error_rate: 返回 500 的概率（API_ERROR，不重试）。
         rate_limit_rate: 概率性 403（含 qpm 文案）的概率。
-        empty_response_rate: 200 但 content 为空的概率。
+        empty_response_rate: 200 但 content 为空的概率（finish_reason=stop，
+            真空响应）。
+        length_truncated_rate: 200 但 content=null 且 finish_reason=length
+            的概率（thinking 耗尽输出预算，实测 43% 失败的主根因）；
+            该 outcome 使用 slow_latency 档并带 completion_tokens=32768。
         invalid_json_rate: 200 但 content 非 JSON 的概率。
         fixed_window_qpm: 非 None 时启用服务端固定自然分钟窗口限流
             （复现审计附录 A.2：窗口内到达数 > 此值 → 403）。
@@ -109,9 +114,9 @@ class MockScenario:
             基础设施类场景（网络错误/500/403/空响应）仍走 seeded rng。
     """
 
-    latency: Tuple[float, float] = (30.0, 90.0)
+    latency: Tuple[float, float] = (4.0, 30.0)
     slow_response_rate: float = 0.0
-    slow_latency: Tuple[float, float] = (150.0, 300.0)
+    slow_latency: Tuple[float, float] = (230.0, 320.0)
     seed: Optional[int] = 42
     match_probability: float = 1.0
     normalized_noise_probability: float = 0.0
@@ -119,6 +124,7 @@ class MockScenario:
     server_error_rate: float = 0.0
     rate_limit_rate: float = 0.0
     empty_response_rate: float = 0.0
+    length_truncated_rate: float = 0.0
     invalid_json_rate: float = 0.0
     fixed_window_qpm: Optional[int] = None
     storm_duration: float = 0.0
@@ -142,6 +148,7 @@ class MockStats:
     in_flight: int = 0
     max_in_flight: int = 0
     connection_count: int = 0
+    payloads: list = field(default_factory=list)  # 每请求 body JSON
 
 
 class MockExpertServer:
@@ -194,6 +201,8 @@ class MockExpertServer:
             return "rate_limited"
         if r() < s.empty_response_rate:
             return "empty"
+        if r() < s.length_truncated_rate:
+            return "length_truncated"
         if r() < s.invalid_json_rate:
             return "invalid_json"
         if s.deterministic_by_content and body_key is not None:
@@ -217,14 +226,17 @@ class MockExpertServer:
         self.stats.max_in_flight = max(self.stats.max_in_flight,
                                        self.stats.in_flight)
         try:
+            # 请求体始终读取并记录（测试据此断言生成参数到达服务端）
             body_key = None
-            if s.deterministic_by_content:
-                try:
-                    payload = await request.json()
+            try:
+                payload = await request.json()
+                self.stats.payloads.append(payload)
+                if s.deterministic_by_content:
                     body_key = json.dumps(payload.get("messages", []),
                                           sort_keys=True, ensure_ascii=False)
-                except Exception:
-                    body_key = None
+            except Exception:
+                payload = None
+                body_key = None
             outcome = self._decide_outcome(body_key)
 
             # 风暴模式：启动后前 N 秒无条件 403（优先级最高）
@@ -248,9 +260,14 @@ class MockExpertServer:
                 self._record(seq, arrival_mono, outcome, 0)
                 return web.Response(status=599)  # 不可达，transport 已断
 
-            # 模拟推理延迟：按概率进超长尾档（思考型模型慢推理建模）
+            # 模拟推理延迟：empty / length_truncated 确定性走超长尾档
+            # （实测慢=token 耗尽，二者强绑定）；其他 outcome 按
+            # slow_response_rate 概率附加（测试超时拆分的独立旋钮）
             latency_range = s.latency
-            if s.slow_response_rate > 0 and self.rng.random() < s.slow_response_rate:
+            if outcome in ("empty", "length_truncated"):
+                latency_range = s.slow_latency
+            elif (s.slow_response_rate > 0
+                    and self.rng.random() < s.slow_response_rate):
                 latency_range = s.slow_latency
             await asyncio.sleep(self.rng.uniform(*latency_range))
 
@@ -273,6 +290,17 @@ class MockExpertServer:
             return 403, None
         if outcome == "server_500":
             return 500, None
+        # thinking 耗尽输出预算：content=null + finish_reason=length +
+        # completion_tokens 顶满 32768（实测完全一致的模式）
+        if outcome == "length_truncated":
+            return 200, {
+                "choices": [{
+                    "message": {"role": "assistant", "content": None},
+                    "finish_reason": "length",
+                }],
+                "model": "mock-expert",
+                "usage": {"prompt_tokens": 512, "completion_tokens": 32768},
+            }
         content = {
             "ok_match": json.dumps(CANONICAL_DOC, ensure_ascii=False),
             "ok_normalized": json.dumps(NORMALIZED_NOISE_DOC, ensure_ascii=False),
@@ -281,9 +309,12 @@ class MockExpertServer:
             "invalid_json": "这不是 JSON，模型输出了解析不了的内容",
         }[outcome]
         return 200, {
-            "choices": [{"message": {"role": "assistant", "content": content}}],
+            "choices": [{
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }],
             "model": "mock-expert",
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "usage": {"prompt_tokens": 512, "completion_tokens": 128},
         }
 
     def _record(self, seq, arrival_mono, outcome, status):

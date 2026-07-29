@@ -159,6 +159,15 @@ class BatchRunner:
                 "max_concurrent": self._config.max_concurrent,
                 "max_sample_attempts": self._config.max_sample_attempts,
                 "network_max_attempts": self._config.network_max_attempts,
+                "request_timeout": self._config.request_timeout,
+                "connect_timeout": self._config.connect_timeout,
+                # 生成参数（32768 事件的教训：不入 summary 则实验不可追溯）
+                "max_tokens": self._config.max_tokens,
+                "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+                "top_k": self._config.top_k,
+                "presence_penalty": self._config.presence_penalty,
+                "enable_thinking": self._config.enable_thinking,
             },
             # 内建指标（audit-01 §5.5）：配额分账 / 在途峰值 / 放大倍数
             "metrics": {
@@ -169,6 +178,8 @@ class BatchRunner:
                 "max_per_sample_in_flight": stats.max_per_sample_in_flight,
                 "amplification": (
                     stats.total_requests / processed if processed else 0.0),
+                # token 消耗（LENGTH_TRUNCATED 浪费的 completion_tokens 在此可见）
+                "token_usage": stats.tokens,
                 # 性能追踪（metrics.py）：四段耗时 / 有效 QPM 曲线 / RTT 分布
                 "performance": self._metrics.report(),
             },

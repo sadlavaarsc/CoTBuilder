@@ -36,7 +36,10 @@ class ErrorType(str, Enum):
     NETWORK_ERROR = "NETWORK_ERROR"      # 连接/超时，可重试
     RATE_LIMITED = "RATE_LIMITED"        # 403/429，可重试
     API_ERROR = "API_ERROR"              # 其他 4xx/5xx，不重试
-    EMPTY_RESPONSE = "EMPTY_RESPONSE"    # 200 但 content 为空
+    EMPTY_RESPONSE = "EMPTY_RESPONSE"    # 200 但 content 为空（真空响应）
+    LENGTH_TRUNCATED = "LENGTH_TRUNCATED"  # 200 但 content 为空且
+    # finish_reason=length——thinking 耗尽输出预算（确定性失败，不重试；
+    # 与真空响应拆开是因为它是实测 43% 失败的主根因，需要独立观测）
 
 
 @dataclass
@@ -48,6 +51,7 @@ class CallOutcome:
     content: Optional[str] = None               # choices[0].message.content
     error: Optional[ErrorType] = None
     retry_after: Optional[float] = None         # RATE_LIMITED 时服务端要求
+    usage: Optional[Dict[str, Any]] = None      # 200 时透传 body["usage"]
 
 
 @dataclass
@@ -63,6 +67,11 @@ class ClientStats:
         "initial": 0, "retry_quality": 0, "retry_network": 0,
     })
     outcomes: Dict[str, int] = field(default_factory=dict)
+    # token 消耗累计（usage 缺失的响应不计入分母之外，单独记数）
+    tokens: Dict[str, int] = field(default_factory=lambda: {
+        "prompt_tokens": 0, "completion_tokens": 0,
+        "responses_with_usage": 0,
+    })
 
 
 class ExpertModelClient:
@@ -175,6 +184,16 @@ class ExpertModelClient:
     def _record_outcome(self, name: str):
         self.stats.outcomes[name] = self.stats.outcomes.get(name, 0) + 1
 
+    def _record_usage(self, body: Dict[str, Any]):
+        """累计 usage token 消耗（200 响应）；缺失 usage 时只计响应数不变。"""
+        usage = body.get("usage")
+        if not isinstance(usage, dict):
+            return
+        t = self.stats.tokens
+        t["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+        t["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+        t["responses_with_usage"] += 1
+
     async def _do_request(self, messages: list) -> CallOutcome:
         cfg = self._config
         assert self._session is not None, "client must be used as async context manager"
@@ -189,25 +208,41 @@ class ExpertModelClient:
                 json={
                     "model": cfg.model,
                     "messages": messages,
-                    "max_tokens": 65536,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "chat_template_kwargs": {"enable_thinking": True},
+                    # 生成参数全部来自 Config（默认 = 官方思考·精确档，
+                    # 见 config.py docstring）；max_tokens=32768 是服务端
+                    # 输出硬上限，调大被静默钳制
+                    "max_tokens": cfg.max_tokens,
+                    "temperature": cfg.temperature,
+                    "top_p": cfg.top_p,
+                    "top_k": cfg.top_k,
+                    "presence_penalty": cfg.presence_penalty,
+                    "chat_template_kwargs": {
+                        "enable_thinking": cfg.enable_thinking,
+                    },
                 },
             ) as resp:
                 if resp.status == 200:
                     body = await resp.json()
-                    content = (
-                        body.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
+                    choice = body.get("choices", [{}])[0]
+                    content = choice.get("message", {}).get("content", "")
+                    self._record_usage(body)
                     if not content:
+                        # token 耗尽（thinking 吃完预算）与真空响应分开：
+                        # 前者是实测 43% 失败的主根因，确定性、不重试
+                        if choice.get("finish_reason") == "length":
+                            self._record_outcome("LENGTH_TRUNCATED")
+                            return CallOutcome(
+                                ok=False, response=body,
+                                error=ErrorType.LENGTH_TRUNCATED,
+                                usage=body.get("usage"))
                         self._record_outcome("EMPTY_RESPONSE")
                         return CallOutcome(ok=False, response=body,
-                                           error=ErrorType.EMPTY_RESPONSE)
+                                           error=ErrorType.EMPTY_RESPONSE,
+                                           usage=body.get("usage"))
                     self._record_outcome("OK")
-                    return CallOutcome(ok=True, response=body, content=content)
+                    return CallOutcome(ok=True, response=body,
+                                       content=content,
+                                       usage=body.get("usage"))
 
                 if resp.status in (403, 429):
                     retry_after = resp.headers.get("Retry-After")

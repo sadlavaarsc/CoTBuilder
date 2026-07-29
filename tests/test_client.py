@@ -114,12 +114,64 @@ class TestErrorClassification:
         assert o.error == ErrorType.NETWORK_ERROR
 
     async def test_empty_response(self):
-        o = await self._one(MockScenario(latency=(0, 0), empty_response_rate=1.0))
+        # 空响应确定性走 slow_latency 档（慢=EMPTY 绑定），测试需同步缩小
+        o = await self._one(MockScenario(latency=(0, 0), slow_latency=(0, 0),
+                                         empty_response_rate=1.0))
         assert o.error == ErrorType.EMPTY_RESPONSE
+
+    async def test_length_truncated(self):
+        """finish_reason=length + content=null → LENGTH_TRUNCATED
+        （与真空响应分流，thinking 耗尽的确定性失败）。"""
+        o = await self._one(MockScenario(
+            latency=(0, 0), slow_latency=(0, 0), length_truncated_rate=1.0))
+        assert o.error == ErrorType.LENGTH_TRUNCATED
+        # usage 透传（token 耗尽账可查：completion_tokens 顶满 32768）
+        assert o.usage["completion_tokens"] == 32768
 
     async def test_ok(self):
         o = await self._one(MockScenario(latency=(0, 0)))
         assert o.ok and o.content
+
+
+class TestUsageAndParams:
+    async def test_usage_accumulated(self, mock):
+        """200 响应的 usage 累计进 ClientStats.tokens。"""
+        srv, base = mock
+        cfg = make_config(base, qpm_limit=6000)
+        async with ExpertModelClient(cfg, PacedRateLimiter(6000)) as c:
+            await c.call([{"role": "user", "content": "x"}])
+            await c.call([{"role": "user", "content": "x"}])
+        assert c.stats.tokens == {
+            "prompt_tokens": 512 * 2,
+            "completion_tokens": 128 * 2,
+            "responses_with_usage": 2,
+        }
+
+    async def test_generation_params_reach_server(self, mock):
+        """Config 的生成参数全部出现在服务端收到的请求体里。"""
+        srv, base = mock
+        cfg = make_config(base, qpm_limit=6000, temperature=0.35,
+                          max_tokens=8192, enable_thinking=False)
+        async with ExpertModelClient(cfg, PacedRateLimiter(6000)) as c:
+            await c.call([{"role": "user", "content": "x"}])
+        body = srv.stats.payloads[0]
+        assert body["temperature"] == 0.35
+        assert body["max_tokens"] == 8192
+        assert body["chat_template_kwargs"]["enable_thinking"] is False
+
+    async def test_default_params_are_official_precise_preset(self, mock):
+        """默认档 = 官方思考·精确任务（0.6/0.95/20/0 + 32768 + thinking）。"""
+        srv, base = mock
+        cfg = make_config(base, qpm_limit=6000)
+        async with ExpertModelClient(cfg, PacedRateLimiter(6000)) as c:
+            await c.call([{"role": "user", "content": "x"}])
+        body = srv.stats.payloads[0]
+        assert body["max_tokens"] == 32768        # 服务端输出硬上限
+        assert body["temperature"] == 0.6
+        assert body["top_p"] == 0.95
+        assert body["top_k"] == 20
+        assert body["presence_penalty"] == 0.0
+        assert body["chat_template_kwargs"]["enable_thinking"] is True
 
 
 class TestSharedSession:

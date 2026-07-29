@@ -4,13 +4,14 @@
 > 原则（CLAUDE.md 开发约定）：指标性能数据一律实际跑 mock 测试得出，不编造。本文所有数字均为真实运行输出。
 > 更新 2026-07-28：原版 comparator 对齐后新增 test_comparator_compat.py（46 项），总数 125 → **171**。
 > 更新 2026-07-29：超时拆分 + 性能追踪系统（metrics.py）落地，新增 test_metrics.py（16 项），总数 171 → **187**。
+> 更新 2026-07-29（二）：官方采样档默认 + LENGTH_TRUNCATED 分类 + usage 统计 + mock 双峰重校准，新增 10 项，总数 187 → **197**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **187 passed**，2 deselected | 44.2s |
-| 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 25.5s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **197 passed**，2 deselected | 46.2s |
+| 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 24.6s |
 
 分文件明细：
 
@@ -21,14 +22,14 @@
 | test_metrics.py | 16 | 桶聚合/percentile/有效 QPM/jsonl 往返/record 不 await、超时拆分（超长尾掐断/放足超时成功/连接快速失败）、metrics 接线（jsonl 四段齐全、summary performance 块、有效 QPM 上界、reporter 行） |
 | test_extractor.py | 12 | 直解/代码块/平衡括号嵌套提取/字符串内括号转义/垃圾文本 |
 | test_ratelimit.py | 12 | paced 间隔、任意 60s 窗 ≤ qpm、并发等待者等差放行、窗口指标、退避上下界/cap/jitter 方差 |
-| test_generator.py | 14 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类、结果字段兼容 |
+| test_generator.py | 15 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类（含 LENGTH_TRUNCATED 不重试）、结果字段兼容 |
 | test_writer.py | 8 | 逐次落盘文件恒合法、定期重写去重、checkpoint 恢复与自愈重建 |
-| test_client.py | 9 | 并发上限（服务端观测 max_in_flight）、限流饱和不占槽、1s 桶上界、错误分类、连接复用 |
-| test_batch.py | 7 | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容 |
+| test_client.py | 13 | 并发上限（服务端观测 max_in_flight）、限流饱和不占槽、1s 桶上界、错误分类（含 LENGTH_TRUNCATED 分流）、连接复用、usage 累计、生成参数到达服务端（默认=官方精确档） |
+| test_batch.py | 9 | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容、summary token_usage/完整 config、LENGTH_TRUNCATED 成桶不重试 |
 | test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
-| test_mock_server.py | 5 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性 |
+| test_mock_server.py | 8 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **189** | |
+| **合计** | **199** | |
 
 ## 核心指标实测值
 
@@ -63,6 +64,21 @@
 - 大延迟抖动（0.05–0.8s，qpm 不介入）：并发打满 ≥ 9/10（R4 推论——并发是瓶颈时限流不应先触发）
 - 混合小故障（断连 5% + 空响应 3% + 非法 JSON 3%）：30 样本全部落定，失败样本 error_type 均为已知类别
 - 说明：按当前需求**未实现**针对此类现象的补偿机制，仅验证系统不失态、不死锁、可恢复
+
+### 官方采样档 / LENGTH_TRUNCATED / usage（2026-07-29 第二批新增）
+
+- **生成参数到达服务端**：mock 记录的请求体断言 `max_tokens=32768 /
+  temperature=0.6 / top_p=0.95 / top_k=20 / presence_penalty=0 /
+  enable_thinking=true`（默认=官方思考·精确档）；Config 覆盖值如实透传
+- **LENGTH_TRUNCATED 分流**：mock `length_truncated` outcome（content=null +
+  finish_reason=length + completion_tokens=32768）→ 客户端分类
+  LENGTH_TRUNCATED；finish_reason=stop 的空响应仍归 EMPTY_RESPONSE
+- **不重试语义回归**：4 样本全 length_truncated 场景恰好 4 次请求
+  （全 initial，retry 两桶为 0），attempts=1，error_type=LENGTH_TRUNCATED
+- **usage 累计**：2 次 OK 调用后 `tokens == {512×2, 128×2, 2}`；
+  batch 后 summary.metrics.token_usage 与请求数严格对账
+- **慢=EMPTY 绑定**：empty_response_rate=1.0 + slow_latency=(0.3,0.4) →
+  服务端实测延迟 ≥ 0.28s（done_monotonic 口径），典型档 (0,0) 不被拖慢
 
 ### 超时拆分与性能追踪（2026-07-29 新增）
 

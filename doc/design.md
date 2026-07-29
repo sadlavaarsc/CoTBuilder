@@ -91,7 +91,8 @@ batch → metrics（创建并注入 client / generator；它们独立构造时 m
 | 403 / 429 | RATE_LIMITED | ✓（尊重 Retry-After，与本地退避取 max） |
 | 其他 4xx/5xx | API_ERROR | ✗ |
 | 连接错误 / 超时 | NETWORK_ERROR | ✓ |
-| 200 但 content 为空 | EMPTY_RESPONSE | ✗（显式决策，见 §5.4） |
+| 200 但 content 为空且 finish_reason=length | LENGTH_TRUNCATED | ✗（thinking 耗尽预算，确定性失败，见 §5.4） |
+| 200 但 content 为空（finish_reason≠length） | EMPTY_RESPONSE | ✗（显式决策，见 §5.4） |
 
 ## 4. 匹配器（审计报告 02 §4–§6 的完整实现）
 
@@ -145,9 +146,12 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 3. **为什么是两本寿命账而不是共享预算**：共享预算是老代码「403 风暴烧光
    样本额度」的机制（附录 B.3.4）。sample_life 只被 MISMATCH 消耗，
    network_life 只被网络/限流错误消耗，互不挤占。
-4. **为什么 EMPTY_RESPONSE / API_ERROR 不重试**：空响应重试会引入无界
-   请求放大且几乎不会自愈；非限流类 4xx/5xx 同理。保持与老代码一致的
-   语义，改它需要先立项评估放大风险。
+4. **为什么 EMPTY_RESPONSE / LENGTH_TRUNCATED / API_ERROR 不重试**：
+   空响应重试会引入无界请求放大且几乎不会自愈；非限流类 4xx/5xx 同理。
+   LENGTH_TRUNCATED（2026-07-29 拆分出的分类）是 thinking 耗尽输出预算
+   的确定性失败——实测同一样本必然复现，重试只是再烧一遍 250s/32768
+   tokens（e2e 报告 §2）。保持与老代码一致的语义，改它需要先立项评估
+   放大风险。
 5. **为什么样本内不并发**：3 并发抽卡的请求放大正是触发服务端 403 风暴
    的直接原因，而风暴杀死的恰恰包括抽卡请求本身（附录 B.1 自我挫败）。
    串行重试 + 跨样本并发用更少的请求获得同样的多次采样机会。
@@ -155,10 +159,16 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
    理想对齐时钟下任意 60s 半开窗口最多放行 qpm+1。这是容差 1 的边界
    效应，与审计附录 A.2 关注的 2× 峰值（100QPM）性质不同；真实
    monotonic 时钟不会出现理想对齐。测试断言用 `≤ qpm + 1`。
-7. **qpm_limit 与 max_concurrent 的关系**（Little's Law）：打满 QPM 50、
-   平均延迟 60s 需要约 50 个在途请求；`max_concurrent=10` 时吞吐上限
-   约 10 QPM。**常规配置下并发是瓶颈，限流不应被触发**；若测试中限流
-   频繁先于并发打满触发，或实际并发长期低于上限，说明两者又被耦合了。
+7. **qpm_limit 与 max_concurrent 的关系**（Little's Law，2026-07-29 按
+   e2e 实测重写）：真实 API 延迟呈**双峰**——OK 请求 4–31s（p50≈10s），
+   thinking 耗尽的 LENGTH_TRUNCATED 230–316s（约占 30% 时混合均值
+   ~84s）。推论分两档：
+   - **EMPTY 问题修复后**（~12s 均值）：打满 QPM 50 只需 ~10 个在途，
+     **QPM 才是瓶颈**，max_concurrent=15–20 即饱和；
+   - **EMPTY 未修复**（30% 慢尾）：需要 ~70 个在途才能打满 QPM 50。
+   小批次（如 30 样本）在途上限 = 样本数，两者都触不到，瓶颈是样本
+   供给本身。若测试中限流频繁先于并发打满触发，或实际并发长期低于
+   上限且无慢尾占位，说明限流与并发又被耦合了。
 8. **时钟统一用 time.monotonic**：wall clock 的 NTP 跳变会破坏放行间隔
    不变量。mock server 记录到达时间戳同样用 monotonic。
 9. **extractor 的行为修正**：老代码第三步用非贪婪正则 `\{.*?\}`，嵌套
@@ -181,6 +191,16 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     期间（并发关键路径），任何挂起都可能引入新的耦合。事件先入内存
     buffer，由 batch 主循环顺带 flush 落盘。同理，metrics 只观测、
     不进任何决策路径；各模块独立构造时 metrics=None（零开销）。
+14. **max_tokens=32768 是服务端硬上限**：Qwen3.6-35B 输出上限 32768
+    （输入 256K），发更大被静默钳制（实测发 65536 实际生效 32768）。
+    thinking 与 content 共享此预算且 thinking 先消耗——**调大无效，
+    调小让 content 更出不来**；要压 thinking 只能从 prompt / 采样参数 /
+    thinking 预算参数入手（见 doc/investigation-01-e2e-diagnosis.md §2）。
+15. **采样参数默认 = 官方「思考·精确任务」档**（0.6/0.95/top_k=20/pp=0）：
+    原 temp=0.1 严重偏离官方建议，是 thinking 死循环的疑似诱因、也让
+    重试近乎确定性。改默认值前先读 investigation 报告的 A/B 实验设计；
+    「照抄原文」保真度由 STRICT 率护栏监控，不要为压重复直接把
+    presence_penalty 拉到 1.5（那是通用档，精确任务档官方建议 0）。
 
 ## 6. 内建指标（观测口径）
 
@@ -194,6 +214,7 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 | `peak_in_flight` | 在途请求峰值（client 侧） | ≤ max_concurrent，常规应贴近 |
 | `max_per_sample_in_flight` | 单样本在途峰值 | 恒 ≤ 1（样本内串行） |
 | `amplification` | 请求放大倍数 = 总请求 / 处理样本数 | ≤ max_sample+network 寿命之和 |
+| `token_usage` | usage 累计：prompt/completion tokens + 有 usage 的响应数 | LENGTH_TRUNCATED 浪费的 completion_tokens 在此可见 |
 
 mock server 侧 `/_stats`：每请求到达时间戳（monotonic+wall）、outcome、
 `max_in_flight`（服务端视角的并发上限断言点）、`done_monotonic`
@@ -251,16 +272,19 @@ python -m pytest tests/ -v -m slow    # 近真实尺度冒烟（真实 qpm=50、
 | 端到端指标 | test_batch / test_degraded | 请求数守恒、时间包络、并发不劣化、403 风暴恢复、降级场景（网络抖动致有效 QPM 略降）、兼容与口径 |
 | 冒烟 | test_smoke（slow） | 真实量级 qpm=50 + 秒级延迟 |
 
-mock 时间尺度策略：延迟默认 (30,90)s 贴近真实；测试把**时间常数整体
-缩小**（延迟 0.05–0.2s + qpm 同步放大），用真实 event loop 几秒跑完，
-测的是真实 asyncio 行为而非虚拟时钟。`deterministic_by_content=True` 时
+mock 时间尺度策略：延迟默认 (4,30)s 贴近实测 OK 分布（2026-07-29 e2e：
+4–31s、p50≈10s）；测试把**时间常数整体缩小**（延迟 0.05–0.2s + qpm
+同步放大），用真实 event loop 几秒跑完，测的是真实 asyncio 行为而非
+虚拟时钟。`deterministic_by_content=True` 时
 mock 按请求内容哈希分配命运，同一样本在任意并发交错下结果一致——
 「并发 vs 串行成功率精确相等」由此可断言。
 
-超长尾建模（2026-07-29 新增）：`slow_response_rate` + `slow_latency`
-（默认 (150,300)s）按概率让请求进入慢推理档，复现思考型模型的真实
-延迟长尾；`RequestRecord.done_monotonic` 记响应完成时刻。超时拆分
-（§5.12）的集成测试即基于此档。
+超长尾建模（2026-07-29 按 e2e 实测校准）：`empty` / `length_truncated`
+outcome **确定性**使用 `slow_latency`（默认 (230,320)s，实测 thinking
+耗尽响应 230–316s）——慢=token 耗尽，二者强绑定；`slow_response_rate`
+（默认 0）保留为其他 outcome 附加慢延迟的独立旋钮（超时拆分测试用）。
+`length_truncated` 响应复刻实测模式：content=null +
+finish_reason=length + completion_tokens=32768。
 
 真实入口（连通专家模型服务后）：
 

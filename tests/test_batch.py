@@ -238,6 +238,50 @@ class TestResume:
         assert result["success_rate"] == 0.5
 
 
+class TestSummaryObservability:
+    async def test_token_usage_and_full_config_in_summary(self, tmp_path):
+        """summary 含 token_usage 与完整生成参数（实验可追溯）。"""
+        samples = [fixture_sample(f"t{i}") for i in range(3)]
+        srv, runner, result, _ = await run_batch(
+            MockScenario(latency=(0.0, 0.0), seed=9, match_probability=1.0),
+            samples, tmp_path, qpm_limit=6000)
+
+        summary = json.loads((tmp_path / "summary.json").read_text())
+        # token_usage：3 个 OK 响应 × mock usage（512/128）
+        assert summary["metrics"]["token_usage"] == {
+            "prompt_tokens": 512 * 3,
+            "completion_tokens": 128 * 3,
+            "responses_with_usage": 3,
+        }
+        # config 块含全部生成参数与超时（32768 事件的教训）
+        cfg = summary["config"]
+        for key in ("max_tokens", "temperature", "top_p", "top_k",
+                    "presence_penalty", "enable_thinking",
+                    "request_timeout", "connect_timeout"):
+            assert key in cfg, key
+        assert cfg["max_tokens"] == 32768
+        assert cfg["temperature"] == 0.6
+
+    async def test_length_truncated_counted_in_outcomes(self, tmp_path):
+        """LENGTH_TRUNCATED 在 outcomes 独立成桶且不重试（请求数守恒）。"""
+        samples = [fixture_sample(f"lt{i}") for i in range(4)]
+        srv, runner, result, _ = await run_batch(
+            MockScenario(latency=(0.0, 0.0), slow_latency=(0.0, 0.0),
+                         seed=10, length_truncated_rate=1.0),
+            samples, tmp_path, qpm_limit=6000)
+
+        stats = runner._client.stats
+        assert stats.outcomes.get("LENGTH_TRUNCATED") == 4
+        # 不重试：恰好 4 次请求，全部 initial
+        assert stats.total_requests == 4
+        assert stats.quota["retry_quality"] == 0
+        assert stats.quota["retry_network"] == 0
+        assert result["failed_count"] == 4
+        for rec in result["results"]:
+            assert rec["error_type"] == "LENGTH_TRUNCATED"
+            assert rec["attempts"] == 1
+
+
 class TestCompat:
     async def test_output_files_and_fields(self, tmp_path):
         """R3：两种输入格式、输出三文件、结果字段与老代码兼容。"""

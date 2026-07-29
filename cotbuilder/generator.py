@@ -148,8 +148,9 @@ class SampleProcessor:
                     await asyncio.sleep(delay)
                 continue
 
-            # API_ERROR / EMPTY_RESPONSE：不重试，直接失败（显式决策，
-            # 见 design.md——空响应重试会引入无界放大）
+            # API_ERROR / EMPTY_RESPONSE / LENGTH_TRUNCATED：不重试，直接
+            # 失败（显式决策，见 design.md §5.4——空响应重试引入无界放大；
+            # LENGTH_TRUNCATED 是 thinking 耗尽预算的确定性失败，重试=纯浪费）
             logger.error("Sample %s: %s", sample_id, outcome.error.value)
             return self._build_result(
                 sample_id, sample, status="failed", attempts=http_count,
