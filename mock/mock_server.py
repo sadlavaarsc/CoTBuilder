@@ -114,6 +114,11 @@ class MockScenario:
             mismatch）按请求 body 哈希确定而非掷硬币——同一样本在任何
             并发交错下命运一致，「并发 vs 串行成功率精确相等」可断言。
             基础设施类场景（网络错误/500/403/空响应）仍走 seeded rng。
+        judge_mode: True 时 OK 响应的 content 改为 judge verdict JSON
+            （cotbuilder/judge.py 的测试基准）：从请求 messages 文本中解析
+            「字段：<name>」清单，逐字段回
+            {"field", "match", "reason"}——ok_match 全部 true、ok_mismatch
+            全部 false、ok_normalized 混合（首个字段 false，其余 true）。
     """
 
     latency: Tuple[float, float] = (4.0, 30.0)
@@ -132,6 +137,7 @@ class MockScenario:
     fixed_window_qpm: Optional[int] = None
     storm_duration: float = 0.0
     deterministic_by_content: bool = False
+    judge_mode: bool = False
 
 
 @dataclass
@@ -234,12 +240,15 @@ class MockExpertServer:
         try:
             # 请求体始终读取并记录（测试据此断言生成参数到达服务端）
             body_key = None
+            judge_fields: list = []
             try:
                 payload = await request.json()
                 self.stats.payloads.append(payload)
                 if s.deterministic_by_content:
                     body_key = json.dumps(payload.get("messages", []),
                                           sort_keys=True, ensure_ascii=False)
+                if s.judge_mode:
+                    judge_fields = self._extract_judge_fields(payload)
             except Exception:
                 payload = None
                 body_key = None
@@ -277,7 +286,7 @@ class MockExpertServer:
                 latency_range = s.slow_latency
             await asyncio.sleep(self.rng.uniform(*latency_range))
 
-            status, payload = self._render(outcome)
+            status, payload = self._render(outcome, judge_fields)
             self._record(seq, arrival_mono, outcome, status)
             if payload is None:
                 text = ("qpm rate limit exceeded, 请求频率超限"
@@ -291,7 +300,25 @@ class MockExpertServer:
         finally:
             self.stats.in_flight -= 1
 
-    def _render(self, outcome: str):
+    @staticmethod
+    def _extract_judge_fields(payload: dict) -> list:
+        """从 judge 请求的 messages 文本中解析字段名清单（「字段：<name>」行）。"""
+        fields: list = []
+        for msg in (payload or {}).get("messages", []):
+            content = msg.get("content")
+            if isinstance(content, list):
+                texts = [p.get("text", "") for p in content
+                         if isinstance(p, dict)]
+                content = "\n".join(texts)
+            if not isinstance(content, str):
+                continue
+            for line in content.splitlines():
+                line = line.strip()
+                if "字段：" in line:
+                    fields.append(line.split("字段：", 1)[1].strip())
+        return fields
+
+    def _render(self, outcome: str, judge_fields: Optional[list] = None):
         """生成 (status, payload)。payload=None 表示纯文本错误响应。"""
         if outcome == "rate_limited":
             return 403, None
@@ -309,6 +336,27 @@ class MockExpertServer:
                 }],
                 "model": "mock-expert",
                 "usage": {"prompt_tokens": 512, "completion_tokens": 32768},
+            }
+        # judge 模式：content 为逐字段 verdict JSON（judge.py 的测试基准）。
+        # ok_match 全 true / ok_mismatch 全 false / ok_normalized 混合
+        if self.scenario.judge_mode and outcome in (
+                "ok_match", "ok_normalized", "ok_mismatch"):
+            fields = judge_fields or ["字段"]
+            verdicts = []
+            for i, f in enumerate(fields):
+                match = {"ok_match": True,
+                         "ok_mismatch": False,
+                         "ok_normalized": i > 0}[outcome]
+                verdicts.append({"field": f, "match": match,
+                                 "reason": "mock verdict"})
+            content = json.dumps({"verdicts": verdicts}, ensure_ascii=False)
+            return 200, {
+                "choices": [{
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }],
+                "model": "mock-expert",
+                "usage": {"prompt_tokens": 512, "completion_tokens": 128},
             }
         content = {
             "ok_match": json.dumps(CANONICAL_DOC, ensure_ascii=False),

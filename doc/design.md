@@ -184,11 +184,11 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
 12. **超时拆分：total 管慢推理，connect 管真故障**：2026-07-29 实测，
     思考型模型（`enable_thinking=true`）推理可超过 2 分钟，
     `ClientTimeout(total=120)` 把正常慢推理掐成了大量 NETWORK_ERROR
-    （时间戳算术验证：间隔 = 120s + 退避，严丝合缝）。现在
-    `request_timeout`（默认 400s，取值推导见 §5.17）只约束总时长，
-    `connect`/`sock_connect`
-    （默认 15s）约束连接建立——真网络故障几秒内快速失败，不陪跑 600s。
-    调小 request_timeout 前先确认模型推理延迟上限。
+    （时间戳算术验证：间隔 = 120s + 退避，严丝合缝）——当时的结论是
+    必须放大 total（见 §5.17 的变迁史）。现在 `request_timeout`
+    （默认 120s，2026-07-30 生产实测推荐值，推导见 §5.17）只约束总
+    时长，`connect`/`sock_connect`（默认 30s）约束连接建立——真网络
+    故障半分钟内快速失败，不陪跑 request_timeout。
 13. **metrics.record 内禁止 await**：事件记录发生在 client 信号量持有
     期间（并发关键路径），任何挂起都可能引入新的耦合。事件先入内存
     buffer，由 batch 主循环顺带 flush 落盘。同理，metrics 只观测、
@@ -210,10 +210,37 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     满额 network_life 重试 = 单样本最多 30 分钟纯浪费。故走网络账
     退避，同时单样本重试 ≤ `gateway_max_attempts`（默认 2）；官方档
     temp=0.6 下 thinking 轨迹有方差，1–2 次重试是有真实胜率的小赌注。
-17. **request_timeout 必须大于网关超时墙**：实测网关墙 ≈360s，合法
-    响应最长可跑 ~359s。客户端超时 < 360s 会把它们掐成 NETWORK_ERROR，
-    既错杀又破坏 GATEWAY_ERROR 分类口径；默认 400s = 网关墙 + 40s
-    余量（响应体传输 + 网关抖动）。网关墙若调整，此值必须同步。
+17. **request_timeout 取值变迁与当前逻辑（120s，2026-07-30）**：
+    - v1（120s）：把合法慢推理（死循环未修复时 thinking 可 >2min）掐成
+      大量 NETWORK_ERROR——错杀；
+    - v2（400s）：「必须大于网关墙 360s，否则错杀合法长推理 + 破坏
+      GATEWAY_ERROR 分类」——该推导的前提是**死循环未修复**，合法响应
+      最长可达 ~359s；
+    - v3（120s，当前）：官方采样档修复死循环后，合法响应实测分布收敛到
+      **4–31s（p50≈10s）**，120s 已留 ~4× 余量；超过 120s 的请求几乎
+      必然已死于 thinking 耗尽（LENGTH_TRUNCATED 230–316s）或正走向
+      网关墙（504@360s）。提前掐断 = 并发槽提前 ~200s 释放 + 重试更
+      早发起（官方档 temp=0.6 下重试有方差、有真实胜率）。
+      **代价（有意接受）**：>120s 的慢失败不再保留 LENGTH_TRUNCATED /
+      GATEWAY_ERROR 精细分类，统一归 NETWORK_ERROR(timeout) 烧网络账
+      （日志中 `TimeoutError, elapsed≈120` 可辨）；单样本死时间上限由
+      ~316s 降到 ~120s。若未来延迟分布右移（更大模型/更长文档），需
+      重新评估此值——判断依据是 OK 响应的 p99 而非网关墙。
+18. **403 风暴可能是服务端口径问题（观测中，未定性）**：2026-07-29
+    生产跑批观察到 in_flight 冲高（26）后 10s 内 11 次 403，而客户端
+    pacing 始终 ≤ QPM 50（403 间隔 ≈1.2s 正是限流器节奏）。嫌疑：
+    共享 key 他人流量挤占 / 服务端限流窗口短于 60s / 单 key 并发数
+    上限。**处理策略维持「只测不补」**——403 只烧网络账、退避+jitter
+    无同步突发、有 network_life 硬顶，一过性风暴会自然消散；跑完用
+    `outcomes.RATE_LIMITED` 占比定性（<10% 不管，持续 >15% 降
+    qpm_limit，确认并发墙则降 max_concurrent）。详细时间线与分析见
+    doc/investigation-01 追加五。
+19. **judge 改判不改变规则匹配器口径**：judge.py 是独立后处理层——
+    主流程 summary 的 gt_analysis/quality 仍以规则判定（STRICT）为准，
+    改判率单独在 judge_summary.json 观测。不要为了让两个口径「一致」
+    去放宽 matcher：STRICT 是验收口径（不自骗），judge 是捞数据手段。
+    同理，**judge 缺 verdict 的 pair 按未改判处理**（保守默认，防模型
+    漏判误判成功）——不要把「缺 verdict」宽松化成「视为通过」。
 
 ## 6. 内建指标（观测口径）
 
@@ -271,6 +298,39 @@ t0 → limiter.acquire() → t1 → semaphore 获取 → t2 → HTTP 完成 → 
 典型排查路径：有效 QPM 曲线塌陷 → 看 phase_shares——wait_limiter 大是
 限流绑定（正常，qpm 配置即瓶颈）；wait_slot 大是并发不足；rtt 大是服务
 端慢；backoff 大是错误率高。配合 metrics.jsonl 逐事件可精确定位样本。
+
+## 6c. Model judge 后处理工具（judge.py，2026-07-30 新增）
+
+**定位**：独立可选工具，**不在正常工作流内**。规则匹配器（STRICT 口径）
+判失败的样本中混有「语义一致但字面有差异」的误判（GT 标注质量：空格/
+连字符/字段内顺序，如 `J-123` vs `J123`）。judge 用同一个模型、纯文本
+（不看图）对失败样本做改判。
+
+```bash
+python -m cotbuilder.judge --input <run输出目录> --output <judge目录> \
+    --api-key <key>            # --input 也可直接给 failed_samples.json
+```
+
+设计决策：
+
+- **只判失败 KV pair**：judge 输入 = `comparison_result.differences`
+  （字段/提取值/标准答案三元组），不发整份 JSON——大部分失败样本只错
+  一两个 key，输入极小省时间省 token；
+- **判定语义 = 「定义什么是错」**（用户定调，见 JUDGE_SYSTEM_PROMPT）：
+  多出/缺失影响实义的内容、字符识别不一致 → 不一致；空白、顺序、
+  无义符号差异 → 忽略；null ≈ 空字符串 ≈ "无" ≈ "N/A"；
+- **保守改判**：样本改判 ⟺ 每个失败 pair 都有对应 verdict 且全部
+  match=true；模型漏判的字段按未改判处理（防漏判误判成功）；
+- **只做网络重试**：NETWORK_ERROR/RATE_LIMITED/GATEWAY_ERROR 退避重试
+  （复用 BackoffPolicy + network_max_attempts）；judge 判 false 不是
+  错误、不重试；API_ERROR/EMPTY/LENGTH_TRUNCATED 终态维持原判；
+- **输出独立目录**（ResultWriter 复用，checkpoint 断点续判免费获得）：
+  改判成功 → success_samples.json（原记录 + judge_result 块，含
+  original_sample/cot_response 可直接作训练数据）；其余 →
+  failed_samples.json（维持原判，不丢数据）；judge_summary.json
+  观测改判率与失败分桶；
+- **复用同一套生产采样参数**（官方精确档 + thinking 开）：比对任务同样
+  受益于思考链，口径与主流程一致。
 
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 

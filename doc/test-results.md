@@ -6,12 +6,13 @@
 > 更新 2026-07-29：超时拆分 + 性能追踪系统（metrics.py）落地，新增 test_metrics.py（16 项），总数 171 → **187**。
 > 更新 2026-07-29（二）：官方采样档默认 + LENGTH_TRUNCATED 分类 + usage 统计 + mock 双峰重校准，新增 10 项，总数 187 → **197**。
 > 更新 2026-07-29（三）：GATEWAY_ERROR 分类（封顶重试）+ request_timeout 收紧 400s + summary quality 块，新增 6 项，总数 197 → **203**。
+> 更新 2026-07-30：model judge 后处理工具（judge.py）+ mock judge_mode，新增 tests/test_judge.py（14 项），总数 203 → **217**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **203 passed**，2 deselected | 45.5s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **217 passed**，2 deselected | 44.3s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -29,8 +30,9 @@
 | test_batch.py | 10 | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容、summary token_usage/完整 config/quality 块、LENGTH_TRUNCATED 成桶不重试 |
 | test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
+| test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **205** | |
+| **合计** | **219** | |
 
 ## 核心指标实测值
 
@@ -112,6 +114,27 @@
   `progress_log_interval=0.2` 实测输出 `in_flight=.. eff_qpm=..
   completed=.. rtt_p50=..` 行，=0 时实测无输出
 
+### model judge 后处理工具（2026-07-30 新增）
+
+- **改判成功搬移**：3 条 failed 记录（各 1 个失败 pair）+ judge_mode
+  mock → 全部进 success_samples.json，`status` 翻 success、judge_result
+  块完整（pairs/verdicts/attempts=1）、original_sample/cot_response
+  原样保留；quota 三桶为 0、全部计入 `judge` 桶（与主流程分账不混）
+- **保守改判规则（纯函数）**：全部 verdict match=true 才改判；任一
+  false、模型漏判字段、verdict 不可解析 → 维持失败（防漏判误判成功）
+- **无 diff 跳过**：3 条记录中 2 条无 differences → 恰好发出 1 次请求，
+  skipped_no_differences=2
+- **403 风暴恢复**：storm 0.05s → 首次 403、退避+pacing 后重试成功，
+  attempts ≥ 2、outcomes.RATE_LIMITED ≥ 1、服务端到达数 == quota
+  judge 桶 == total_requests（请求数守恒）
+- **寿命语义**：network_error_rate=1.0 + network_max_attempts=2 → 恰好
+  2 次请求后 network_exhausted 收尾；server_error_rate=1.0（500）→
+  attempts=1 不重试（终态）；invalid_json_rate=1.0 → judge_parse_failed
+  不重试
+- **断点续判**：先判 2 条 → 重跑 4 条，skipped_resume=2、judged=2，
+  最终 success_samples.json 4 个 id 无重复；judge_summary.json 计数
+  与文件记录数对账一致
+
 ### 匹配器（audit-02 §7）
 - 规格符合性：R-N1（全角字母/数字/符号、￥、U+3000、中文标点表）与 R-N2（标点前后空格、strip）逐条正反例通过；R-N3 规格外差异（大小写、缺 ¥、内部空格破坏、5.83 vs 5.830、™ 不经 NFKC 折叠）全部判 MISMATCH
 - 三个永久回归用例固化：`LAU` vs `Lau`、`¥5.83` vs `5.83`、`LAU, LAI LI` vs `LAU,LAIL I`
@@ -127,7 +150,7 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-.venv/bin/python -m pytest tests/ -v            # 187 项指标测试（~44s）
+.venv/bin/python -m pytest tests/ -v            # 217 项指标测试（~44s）
 .venv/bin/python -m pytest tests/ -v -m slow    # 2 项近真实尺度冒烟（~26s）
 ```
 
