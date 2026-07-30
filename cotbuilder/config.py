@@ -21,16 +21,27 @@ class Config:
         max_concurrent: 在途 HTTP 请求硬上限。
         max_sample_attempts: 样本寿命——单样本最多进队尝试次数（仅 MISMATCH 消耗）。
         network_max_attempts: 网络寿命——单样本网络/限流类错误的最大重试次数。
-        request_timeout: 单次 HTTP 请求总超时（秒）。默认 400 = 网关超时墙
-            （实测 ≈360s）+ 40s 余量：合法响应最长可跑 ~359s，客户端超时
-            必须 > 360s 才不错杀；超过 360s 的请求已被网关 504，等更久
-            是死时间（推导见 doc/investigation-01-e2e-diagnosis.md 追加三）。
-        connect_timeout: 建立连接的超时（秒）。连接失败快速失败，与慢推理
-            分离——真网络故障几秒内就能判死，无需陪跑 request_timeout。
+        request_timeout: 单次 HTTP 请求总超时（秒）。默认 120 = 2026-07-30
+            生产实测推荐值。推理：官方采样档修复死循环后，合法响应实测
+            分布 4–31s（p50≈10s），120s 留 ~4× 余量；超过 120s 的请求
+            几乎必然已死于 thinking 耗尽（LENGTH_TRUNCATED 实测
+            230–316s）或正走向网关墙（504@360s）——提前掐断释放并发槽、
+            早点重试（官方档下重试有方差、有真实胜率）。
+            **有意放弃了「超时必须大于网关墙 360s」的旧结论**（旧推导见
+            doc/investigation-01 追加三，推翻记录见追加五）：代价是
+            >120s 的慢失败不再保留 LENGTH_TRUNCATED / GATEWAY_ERROR
+            精细分类，统一归 NETWORK_ERROR(timeout) 烧网络账重试
+            （日志 `elapsed≈120` 可辨）；换来的是单样本死时间上限从
+            ~316s 降到 ~120s，并发槽周转率显著提升。
+        connect_timeout: 建立连接的超时（秒）。默认 30 = 生产实测推荐值，
+            弱网/代理环境下不冤杀慢握手；真连接故障仍在半分钟内快速
+            失败，不陪跑 request_timeout。
         gateway_max_attempts: 网关类错误（502/503/504）单样本重试上限。
             504 实测多为网关 360s 阈值截断（确定性长尾），满额 network_life
             重试 = 单样本最多 30 分钟纯浪费，故单独封顶（默认 2）；仍消耗
-            network_life，两约束同时生效。
+            network_life，两约束同时生效。注：request_timeout=120 下，
+            360s 慢 504 会先被掐成 NETWORK_ERROR(timeout)，此分类主要
+            覆盖快速返回的 502/503/504。
         backoff_base: 退避基数（秒），第 n 次重试退避 min(base*2^n, cap)。
         backoff_cap: 退避上限（秒）。
         backoff_jitter: 退避抖动幅度，0.5 表示 ±50%，破坏多协程同步退避。
@@ -59,8 +70,8 @@ class Config:
     max_concurrent: int = 10
     max_sample_attempts: int = 3
     network_max_attempts: int = 5
-    request_timeout: float = 400.0
-    connect_timeout: float = 15.0
+    request_timeout: float = 120.0
+    connect_timeout: float = 30.0
     gateway_max_attempts: int = 2
     backoff_base: float = 5.0
     backoff_cap: float = 60.0

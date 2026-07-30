@@ -50,12 +50,13 @@ def main() -> None:
     parser.add_argument("--gateway-max-attempts", type=int, default=2,
                         help="网关错误（502/503/504）单样本重试上限"
                              "（504 多为网关阈值截断，满额重试是浪费）")
-    parser.add_argument("--request-timeout", type=float, default=400.0,
-                        help="单次请求总超时（秒）。默认 400 = 网关超时墙"
-                             "（≈360s）+ 余量；合法响应最长可跑 ~359s，"
-                             "低于 360 会错杀长推理")
-    parser.add_argument("--connect-timeout", type=float, default=15.0,
-                        help="建立连接超时（秒），真网络故障快速失败")
+    parser.add_argument("--request-timeout", type=float, default=120.0,
+                        help="单次请求总超时（秒）。默认 120 = 生产实测推荐："
+                             "合法响应 4–31s，>120s 几乎必死（token 耗尽/"
+                             "网关墙），提前掐断释放并发槽")
+    parser.add_argument("--connect-timeout", type=float, default=30.0,
+                        help="建立连接超时（秒）。默认 30 = 生产实测推荐，"
+                             "真网络故障半分钟内快速失败")
     parser.add_argument("--max-tokens", type=int, default=32768,
                         help="输出 token 上限。32768 是服务端硬上限，"
                              "调大无效（被静默钳制）")

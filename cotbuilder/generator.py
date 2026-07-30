@@ -32,25 +32,20 @@ from .ratelimit import BackoffPolicy
 
 logger = logging.getLogger(__name__)
 
-# CoT v2.3 系统提示词（与老代码一致，prompt 内容不在本次重构范围内）
-SYSTEM_PROMPT_V2_3 = (
-    "你是一个专业的文档信息提取专家。请仔细分析图片中的文档，提取指定的关键信息。\n"
-    "\n"
-    "请按照以下步骤进行推理：\n"
-    "1. 首先观察图片的整体布局和文档类型\n"
-    "2. 识别文档中的关键字段位置\n"
-    "3. 逐个提取每个字段的值\n"
-    "4. 验证提取结果的准确性\n"
-    "5. 输出完整的 JSON 格式结果\n"
-    "\n"
+# CoT 系统提示词 v2.4（2026-07-30 生产调优版，替换与老代码一致的 v2.3）
+# 相对 v2.3 的变化：去掉角色设定与 5 步推理指令；缺失字段规则由
+# 「结合已有信息推理」改为「null 填充」（推理补全的值与 GT 严格比对
+# 必 MISMATCH，null 与标注口径一致）；去掉纯数字长串核对规则。
+# prompt 属实验内容，调优记录见 doc/investigation-01-e2e-diagnosis.md 追加五。
+SYSTEM_PROMPT_V2_4 = (
+    "任务：分析图片中的文档，提取指定的关键信息。\n"
     "提取规则（必须严格遵守）：\n"
     "1. 照抄原文：图中已有字段值必须与图中文字完全一致，不得改写、不得补全、不得省略。\n"
     "   图中有的符号（如 ¥、®、™）保留，图中没有的不得添加；\n"
     "2. 标点风格：中文字段使用中文标点（全角），英文字段使用英文标点，\n"
     "   英文逗号后保留一个空格（如 \"LAU, LAI LI\"）；\n"
     "3. 金额字段：保留图中所示的货币符号与数字格式（如图中为\"¥5.83\"，输出\"¥5.83\"）；\n"
-    "4. 字段在图中不存在时，结合已有信息进行推理，得到实际的结果；\n"
-    "5. 纯数字长串（发票号码、校验码等）逐位核对后再输出。\n"
+    "4. 字段在图中不存在时，用null填充；\n"
     "\n"
     "请使用中文进行推理思考，最终输出 JSON 格式的结果。"
 )
@@ -268,7 +263,7 @@ class SampleProcessor:
     def _build_messages(self, sample: Dict[str, Any],
                         cot_prompt: Optional[str]) -> List[Dict[str, Any]]:
         """构造多模态消息（与老代码语义一致）。"""
-        system_message = cot_prompt or SYSTEM_PROMPT_V2_3
+        system_message = cot_prompt or SYSTEM_PROMPT_V2_4
 
         if "messages" in sample and sample["messages"]:
             user_message = sample["messages"][0].get("content", "")
