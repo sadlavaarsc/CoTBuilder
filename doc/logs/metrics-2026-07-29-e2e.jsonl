@@ -1,0 +1,120 @@
+2026-07-29 09:06:52,893 - INFO - Progress: 3/30 (skipped: 0)
+2026-07-29 09:06:56,124 - INFO - in_flight=14 eff_qpm=0.0 completed=3/30 rtt_p50=8.9s
+2026-07-29 09:07:26,124 - INFO - in_flight=26 eff_qpm=0.0 completed=3/30 rtt_p50=12.2s
+2026-07-29 09:07:26,596 - WARNING - rate limited (403)
+2026-07-29 09:07:26,597 - WARNING - Sample sample_9: RATE_LIMITED, retrying in 5.5s (network life 4/5)
+2026-07-29 09:07:27,565 - WARNING - rate limited (403)
+2026-07-29 09:07:27,565 - WARNING - Sample sample_5: RATE_LIMITED, retrying in 3.0s (network life 4/5)
+2026-07-29 09:07:28,885 - WARNING - rate limited (403)
+2026-07-29 09:07:28,887 - WARNING - Sample sample_10: RATE_LIMITED, retrying in 3.2s (network life 4/5)
+2026-07-29 09:07:30,094 - WARNING - rate limited (403)
+2026-07-29 09:07:30,095 - WARNING - Sample sample_25: RATE_LIMITED, retrying in 6.4s (network life 4/5)
+2026-07-29 09:07:31,282 - WARNING - rate limited (403)
+2026-07-29 09:07:31,283 - WARNING - Sample sample_18: RATE_LIMITED, retrying in 3.5s (network life 4/5)
+2026-07-29 09:07:32,371 - WARNING - rate limited (403)
+2026-07-29 09:07:32,372 - WARNING - Sample sample_5: RATE_LIMITED, retrying in 9.5s (network life 3/5)
+2026-07-29 09:07:33,887 - WARNING - rate limited (403)
+2026-07-29 09:07:33,888 - WARNING - Sample sample_9: RATE_LIMITED, retrying in 12.6s (network life 3/5)
+2026-07-29 09:07:34,900 - WARNING - rate limited (403)
+2026-07-29 09:07:34,900 - WARNING - Sample sample_10: RATE_LIMITED, retrying in 11.4s (network life 3/5)
+2026-07-29 09:07:36,339 - WARNING - rate limited (403)
+2026-07-29 09:07:36,340 - WARNING - Sample sample_26: RATE_LIMITED, retrying in 2.5s (network life 4/5)
+2026-07-29 09:07:36,596 - INFO - Sample sample_22: exhausted, best level MISMATCH
+{"ts": 5707842.7874, "sample_id": "sample_1", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 1.1954, "wait_slot": 0.0, "rtt": 6.2108}
+{"ts": 5707847.6683, "sample_id": "sample_5", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 5.9709, "wait_slot": 0.0, "rtt": 6.2921}
+{"ts": 5707850.7391, "sample_id": "sample_2", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 2.3898, "wait_slot": 0.0, "rtt": 12.963}
+{"ts": 5707853.7693, "sample_id": "sample_10", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 11.9598, "wait_slot": 0.0, "rtt": 6.393}
+{"ts": 5707854.2289, "sample_id": "sample_14", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 16.7525, "wait_slot": 0.0, "rtt": 2.0521}
+{"ts": 5707856.3847, "sample_id": "sample_0", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 0.0, "wait_slot": 0.0, "rtt": 21.0097}
+{"ts": 5707857.0831, "sample_id": "sample_15", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 17.9519, "wait_slot": 0.0, "rtt": 3.7063}
+{"ts": 5707857.634, "sample_id": "sample_11", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 13.1587, "wait_slot": 0.0, "rtt": 9.0579}
+{"ts": 5707858.0955, "sample_id": "sample_6", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 7.1701, "wait_slot": 0.0, "rtt": 15.5181}
+{"ts": 5707858.6045, "sample_id": "sample_17", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 20.35, "wait_slot": 0.0, "rtt": 2.8278}
+{"ts": 5707858.9328, "sample_id": "sample_18", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 21.5487, "wait_slot": 0.0, "rtt": 1.9569}
+{"ts": 5707860.8811, "sample_id": "sample_3", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 3.5843, "wait_slot": 0.0, "rtt": 21.904}
+{"ts": 5707860.9262, "sample_id": "sample_8", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 9.5637, "wait_slot": 0.0, "rtt": 15.9493}
+{"ts": 5707861.9249, "sample_id": "sample_16", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 19.15, "wait_slot": 0.0, "rtt": 7.3491}
+{"ts": 5707861.9464, "sample_id": "sample_20", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 23.945, "wait_slot": 0.0, "rtt": 2.5706}
+{"ts": 5707862.7534, "sample_id": "sample_13", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 15.5533, "wait_slot": 0.0, "rtt": 11.7763}
+{"ts": 5707870.1039, "sample_id": "sample_12", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 14.3571, "wait_slot": 0.0, "rtt": 20.3266}
+{"ts": 5707870.8559, "sample_id": "sample_22", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 26.3413, "wait_slot": 0.0, "rtt": 9.0793}
+{"ts": 5707875.6972, "sample_id": "sample_5", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 22.5078, "wait_slot": 0.0, "rtt": 5.5206}
+{"ts": 5707876.383, "sample_id": "sample_27", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 32.3262, "wait_slot": 0.0, "rtt": 8.6068}
+{"ts": 5707880.3402, "sample_id": "sample_10", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 18.8064, "wait_slot": 0.0, "rtt": 7.7641}
+{"ts": 5707882.189, "sample_id": "sample_17", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 21.1717, "wait_slot": 0.0, "rtt": 2.4125}
+{"ts": 5707882.4022, "sample_id": "sample_15", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 19.094, "wait_slot": 0.0, "rtt": 6.2249}
+{"ts": 5707883.7118, "sample_id": "sample_18", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 22.0432, "wait_slot": 0.0, "rtt": 2.7354}
+{"ts": 5707887.7267, "sample_id": "sample_11", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 19.7419, "wait_slot": 0.0, "rtt": 10.3504}
+{"ts": 5707891.1715, "sample_id": "sample_8", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 22.4494, "wait_slot": 0.0, "rtt": 7.7955}
+{"ts": 5707891.4519, "sample_id": "sample_13", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 23.0227, "wait_slot": 0.0, "rtt": 5.6757}
+{"ts": 5707892.5705, "sample_id": "sample_17", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 8.3883, "wait_slot": 0.0, "rtt": 1.9931}
+{"ts": 5707893.2253, "sample_id": "sample_25", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 29.9295, "wait_slot": 0.0, "rtt": 27.8482}
+{"ts": 5707893.5098, "sample_id": "sample_10", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 9.0356, "wait_slot": 0.0, "rtt": 4.1337}
+{"ts": 5707893.5948, "sample_id": "sample_6", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 20.4801, "wait_slot": 0.0, "rtt": 15.0186}
+{"ts": 5707893.8128, "sample_id": "sample_14", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 19.5467, "wait_slot": 0.0, "rtt": 20.0367}
+{"ts": 5707893.9791, "sample_id": "sample_3", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 21.2951, "wait_slot": 0.0, "rtt": 11.8025}
+{"ts": 5707894.2413, "sample_id": "sample_21", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 25.1448, "wait_slot": 0.0, "rtt": 33.6645}
+{"ts": 5707894.7562, "sample_id": "sample_18", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 9.2642, "wait_slot": 0.0, "rtt": 1.7799}
+{"ts": 5707894.7985, "sample_id": "sample_5", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 12.4782, "wait_slot": 0.0, "rtt": 6.6227}
+{"ts": 5707895.1059, "sample_id": "sample_0", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 18.5912, "wait_slot": 0.0, "rtt": 20.1295}
+{"ts": 5707895.7951, "sample_id": "sample_8", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 4.204, "wait_slot": 0.0, "rtt": 0.4192}
+{"ts": 5707895.7955, "sample_id": "sample_8", "kind": "backoff", "backoff": 2.5028}
+{"ts": 5707896.9934, "sample_id": "sample_13", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 5.1244, "wait_slot": 0.0, "rtt": 0.4168}
+{"ts": 5707896.9937, "sample_id": "sample_13", "kind": "backoff", "backoff": 4.8285}
+{"ts": 5707898.1976, "sample_id": "sample_25", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 4.5509, "wait_slot": 0.0, "rtt": 0.421}
+{"ts": 5707898.1979, "sample_id": "sample_25", "kind": "backoff", "backoff": 4.9796}
+{"ts": 5707899.309, "sample_id": "sample_6", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 5.3807, "wait_slot": 0.0, "rtt": 0.333}
+{"ts": 5707899.3094, "sample_id": "sample_6", "kind": "backoff", "backoff": 3.3172}
+{"ts": 5707900.3752, "sample_id": "sample_14", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 6.3631, "wait_slot": 0.0, "rtt": 0.1991}
+{"ts": 5707900.3754, "sample_id": "sample_14", "kind": "backoff", "backoff": 6.4768}
+{"ts": 5707902.0215, "sample_id": "sample_3", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 7.3975, "wait_slot": 0.0, "rtt": 0.6446}
+{"ts": 5707902.0217, "sample_id": "sample_3", "kind": "backoff", "backoff": 3.2927}
+{"ts": 5707902.9918, "sample_id": "sample_21", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 8.3341, "wait_slot": 0.0, "rtt": 0.4158}
+{"ts": 5707902.9919, "sample_id": "sample_21", "kind": "backoff", "backoff": 7.1864}
+{"ts": 5707904.0247, "sample_id": "sample_0", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 8.6698, "wait_slot": 0.0, "rtt": 0.2485}
+{"ts": 5707904.025, "sample_id": "sample_0", "kind": "backoff", "backoff": 3.879}
+{"ts": 5707904.507, "sample_id": "sample_1", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 26.1874, "wait_slot": 0.0, "rtt": 35.5315}
+{"ts": 5707905.4157, "sample_id": "sample_8", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 6.6766, "wait_slot": 0.0, "rtt": 0.4399}
+{"ts": 5707905.4158, "sample_id": "sample_8", "kind": "backoff", "backoff": 10.1167}
+{"ts": 5707906.1267, "sample_id": "sample_15", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 9.3733, "wait_slot": 0.0, "rtt": 14.351}
+{"ts": 5707906.6001, "sample_id": "sample_13", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 4.3512, "wait_slot": 0.0, "rtt": 0.4245}
+{"ts": 5707906.6004, "sample_id": "sample_13", "kind": "backoff", "backoff": 10.2309}
+{"ts": 5707907.3971, "sample_id": "sample_12", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 16.8722, "wait_slot": 0.0, "rtt": 20.4205}
+{"ts": 5707907.7714, "sample_id": "sample_6", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 4.7491, "wait_slot": 0.0, "rtt": 0.3948}
+{"ts": 5707907.7716, "sample_id": "sample_6", "kind": "backoff", "backoff": 8.6583}
+{"ts": 5707908.1748, "sample_id": "sample_2", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 20.6364, "wait_slot": 0.0, "rtt": 36.7988}
+{"ts": 5707908.9986, "sample_id": "sample_25", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 5.3973, "wait_slot": 0.0, "rtt": 0.4228}
+{"ts": 5707908.9989, "sample_id": "sample_25", "kind": "backoff", "backoff": 9.5086}
+{"ts": 5707910.1447, "sample_id": "sample_1", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 5.2687, "wait_slot": 0.0, "rtt": 0.3679}
+{"ts": 5707910.1449, "sample_id": "sample_1", "kind": "backoff", "backoff": 6.0151}
+{"ts": 5707910.8063, "sample_id": "sample_20", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 22.6295, "wait_slot": 0.0, "rtt": 26.2301}
+{"ts": 5707911.463, "sample_id": "sample_3", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 5.6608, "wait_slot": 0.0, "rtt": 0.487}
+{"ts": 5707911.4633, "sample_id": "sample_3", "kind": "backoff", "backoff": 8.3856}
+{"ts": 5707912.3573, "sample_id": "sample_14", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 5.3233, "wait_slot": 0.0, "rtt": 0.1811}
+{"ts": 5707912.3575, "sample_id": "sample_14", "kind": "backoff", "backoff": 10.5064}
+{"ts": 5707913.0959, "sample_id": "sample_24", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 28.7309, "wait_slot": 0.0, "rtt": 48.9203}{"ts": 5707913.8592, "sample_id": "sample_12", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 5.9784, "wait_slot": 0.0, "rtt": 0.4834}
+{"ts": 5707913.8595, "sample_id": "sample_12", "kind": "backoff", "backoff": 3.6458}
+{"ts": 5707917.3109, "sample_id": "sample_21", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 6.7978, "wait_slot": 0.0, "rtt": 0.3344}
+{"ts": 5707917.3112, "sample_id": "sample_21", "kind": "backoff", "backoff": 14.8354}
+{"ts": 5707918.4655, "sample_id": "sample_20", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 7.3696, "wait_slot": 0.0, "rtt": 0.2893}
+{"ts": 5707918.4657, "sample_id": "sample_20", "kind": "backoff", "backoff": 4.0829}
+{"ts": 5707919.802, "sample_id": "sample_24", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_quality", "wait_limiter": 6.2801, "wait_slot": 0.0, "rtt": 0.4255}
+{"ts": 5707919.8023, "sample_id": "sample_24", "kind": "backoff", "backoff": 3.1296}
+{"ts": 5707920.9477, "sample_id": "sample_8", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 5.0424, "wait_slot": 0.0, "rtt": 0.3716}
+{"ts": 5707920.9479, "sample_id": "sample_8", "kind": "backoff", "backoff": 18.5107}
+{"ts": 5707922.3027, "sample_id": "sample_1", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 5.6155, "wait_slot": 0.0, "rtt": 0.5251}
+{"ts": 5707922.3029, "sample_id": "sample_1", "kind": "backoff", "backoff": 12.6491}
+{"ts": 5707922.6375, "sample_id": "sample_11", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 6.4486, "wait_slot": 0.0, "rtt": 28.4617}
+{"ts": 5707923.3419, "sample_id": "sample_6", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 6.5439, "wait_slot": 0.0, "rtt": 0.3664}
+{"ts": 5707923.3422, "sample_id": "sample_6", "kind": "backoff", "backoff": 29.0556}
+{"ts": 5707924.6748, "sample_id": "sample_13", "kind": "request", "outcome": "RATE_LIMITED", "quota_kind": "retry_network", "wait_limiter": 7.3448, "wait_slot": 0.0, "rtt": 0.4978}
+{"ts": 5707924.6751, "sample_id": "sample_13", "kind": "backoff", "backoff": 15.5801}
+{"ts": 5707928.5703, "sample_id": "sample_19", "kind": "request", "outcome": "OK", "quota_kind": "initial", "wait_limiter": 22.7455, "wait_slot": 0.0, "rtt": 70.395}
+{"ts": 5707933.0802, "sample_id": "sample_20", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 6.4265, "wait_slot": 0.0, "rtt": 4.1038}
+{"ts": 5707934.299, "sample_id": "sample_14", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 7.3116, "wait_slot": 0.0, "rtt": 4.1223}
+{"ts": 5707943.2887, "sample_id": "sample_12", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 7.8715, "wait_slot": 0.0, "rtt": 17.9109}
+{"ts": 5707945.6716, "sample_id": "sample_8", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 0.0, "wait_slot": 0.0, "rtt": 6.2082}
+{"ts": 5707947.3909, "sample_id": "sample_19", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 4.0048, "wait_slot": 0.0, "rtt": 14.8153}
+{"ts": 5707955.151, "sample_id": "sample_24", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 8.4432, "wait_slot": 0.0, "rtt": 23.7745}
+{"ts": 5707955.5558, "sample_id": "sample_1", "kind": "request", "outcome": "OK", "quota_kind": "retry_network", "wait_limiter": 0.0222, "wait_slot": 0.0, "rtt": 20.5805}
+{"ts": 5707960.2961, "sample_id": "sample_2", "kind": "request", "outcome": "OK", "quota_kind": "retry_quality", "wait_limiter": 7.601, "wait_slot": 0.0, "rtt": 44.52}
