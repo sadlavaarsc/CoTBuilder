@@ -436,3 +436,25 @@ scored/unscored 计数，看平均 KV 质量而不只是完美样本）。
   修复时需同步补 mock 测试断言「MISMATCH 耗尽记录含 ground_truth」；
 - **关联**：formats.md §2「条件字段按路径」表格在核实后需同步修订
   （当前口径为「成功/MISMATCH 耗尽字段全」）。
+
+### 2026-08-03（八）｜【待核实·暂不处理】下游汇报：merge/combine 的 sample_id 合并疑似丢数据
+
+- **汇报内容**：merge 与 combine 的合并/join 逻辑均以 `sample_id`
+  为键（merge.py sample_id join、combine.py sample_id 去重后赢），
+  下游反馈**相同 sample_id 的记录被直接合并导致丢数据**；
+- **具体案例**：三个 part 各「700 原始 success + 300 overturned」，
+  预期合计 3000 条；实际第一次 unique 后只剩 2000 条，最终 combine
+  后只剩 1000 条——量级与「各 part 间 sample_id 大量撞车、去重后赢
+  逐批覆盖」的猜测一致（例如各批输入复用了同一批 sample_id 命名，
+  或同一批样本被多轮跑/判后 id 未区分轮次）；
+- **影响面**：多批次汇总量产训练数据的主路径（workflow.md 多批次
+  一节）；若 id 撞车属实，丢的是**静默**数据（不报错、计数对账仍
+  自洽，combine_summary 的 deduped 键有记录但易被忽略）；
+- **当前状态**：**按用户指示仅记录汇报，未核查、未修复**。
+  待核查方向：① 确认三 part 的 sample_id 实际撞车率（是否为上游
+  切分时 id 未加批次前缀）；② combine 是否应支持「跨来源同 id
+  视为不同样本」模式（如按 (source, sample_id) 复合键）或至少在
+  summary 里对高 dedup 率打 warning；③ merge 的 join 同理；
+- **关联**：追加七（ground_truth 缺失）同为「暂挂的下游汇报」，
+  处理时建议一并排期；formats.md §5/§7 与 design.md §6f 的
+  combine 语义描述在结论落地后需同步修订。
