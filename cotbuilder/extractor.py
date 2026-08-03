@@ -17,7 +17,7 @@
 import ast
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*", re.IGNORECASE)
 
@@ -62,6 +62,58 @@ def _loads_obj(candidate: str) -> Optional[dict]:
     return value if isinstance(value, dict) else None
 
 
+def _ast_obj(candidate: str) -> Optional[dict]:
+    """ast.literal_eval 兜底（单引号 Python 风格字典），失败返回 None。"""
+    try:
+        value = ast.literal_eval(candidate)
+    except (ValueError, SyntaxError, MemoryError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def find_json_span(text: Optional[str]) -> Optional[Tuple[int, int]]:
+    """定位文本中第一个可解析 JSON 对象的 (start, end) 偏移（end 不含）。
+
+    与 extract_json 完全同一套提取优先级（整体 → 代码块 → 全文平衡
+    扫描），只是返回**位置**而不是解析结果；text[start:end] 保证可被
+    json 或 ast 解析为 dict。用途：convert.py 把 cot_response 拆成
+    「推理链文本 + JSON 答案」两段（剥离 JSON span 即得推理链）。
+    """
+    if not text:
+        return None
+
+    # 1. 整体（strip 后 json 或 ast 任一可解为 dict）
+    begin = len(text) - len(text.lstrip())
+    end = len(text.rstrip())
+    stripped = text[begin:end]
+    if _loads_obj(stripped) is not None or _ast_obj(stripped) is not None:
+        return (begin, end)
+
+    # 2. 代码块：取 ``` 标记之后的第一个平衡对象
+    for m in _CODE_BLOCK_RE.finditer(text):
+        brace = text.find("{", m.end())
+        if brace == -1:
+            continue
+        candidate = _scan_balanced(text, brace)
+        if candidate and _loads_obj(candidate) is not None:
+            return (brace, brace + len(candidate))
+
+    # 3. 全文第一个平衡对象（json 或 ast 任一可解）
+    brace = text.find("{")
+    while brace != -1:
+        candidate = _scan_balanced(text, brace)
+        if candidate:
+            if (_loads_obj(candidate) is not None
+                    or _ast_obj(candidate) is not None):
+                return (brace, brace + len(candidate))
+            # 该对象解析失败，跳到其之后继续找
+            brace = text.find("{", brace + len(candidate))
+        else:
+            brace = text.find("{", brace + 1)
+
+    return None
+
+
 def extract_json(text: Optional[str]) -> Optional[dict]:
     """从文本中提取第一个可解析的 JSON 对象，失败返回 None。
 
@@ -71,52 +123,11 @@ def extract_json(text: Optional[str]) -> Optional[dict]:
     Returns:
         提取出的 dict；无法提取时返回 None。
     """
-    if not text:
+    span = find_json_span(text)
+    if span is None:
         return None
-
-    # 1. 整体直解
-    stripped = text.strip()
-    result = _loads_obj(stripped)
+    candidate = text[span[0]:span[1]]
+    result = _loads_obj(candidate)
     if result is not None:
         return result
-
-    # 2. 单引号 Python 风格字典兜底（ast.literal_eval 安全解析）
-    try:
-        value = ast.literal_eval(stripped)
-        if isinstance(value, dict):
-            return value
-    except (ValueError, SyntaxError, MemoryError):
-        pass
-
-    # 3. 代码块：取 ``` 标记之后的第一个平衡对象
-    for m in _CODE_BLOCK_RE.finditer(text):
-        brace = text.find("{", m.end())
-        if brace == -1:
-            continue
-        candidate = _scan_balanced(text, brace)
-        if candidate:
-            result = _loads_obj(candidate)
-            if result is not None:
-                return result
-
-    # 4. 全文第一个平衡对象（含单引号变体）
-    brace = text.find("{")
-    while brace != -1:
-        candidate = _scan_balanced(text, brace)
-        if candidate:
-            result = _loads_obj(candidate)
-            if result is None:
-                try:
-                    value = ast.literal_eval(candidate)
-                    if isinstance(value, dict):
-                        result = value
-                except (ValueError, SyntaxError, MemoryError):
-                    pass
-            if result is not None:
-                return result
-            # 该对象解析失败，跳到其之后继续找
-            brace = text.find("{", brace + len(candidate))
-        else:
-            brace = text.find("{", brace + 1)
-
-    return None
+    return _ast_obj(candidate)

@@ -243,6 +243,18 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     去放宽 matcher：STRICT 是验收口径（不自骗），judge 是捞数据手段。
     同理，**judge 缺 verdict 的 pair 按未改判处理**（保守默认，防模型
     漏判误判成功）——不要把「缺 verdict」宽松化成「视为通过」。
+20. **merge/convert 是纯离线只读工具**：merge.py 与 convert.py 不触
+    网络、不改源目录任何字节（merge 的 --output 禁止与 --run 同目录，
+     argparse 层直接报错）。合并只按 sample_id join、按 status 路由——
+    **不要**在 merge 里「顺手」修字段/补字段：标签语义就是
+    `judge_result` 键的存在性，原记录（含规则判定的 comparison_result）
+    必须原样保留，否则反复 judge 与口径审计会失真。
+21. **thinking 文本回收优先级不可颠倒**：convert 的 thinking 模式按
+    ① full_api_response 的 reasoning_content → ② cot_response 剥离
+    JSON span（find_json_span）取推理链；两者皆空则**不加 <thinking>
+    包裹**。不要为了让标签非空去拼接 predicted_json 或复述答案——
+    假推理链进训练数据比没有推理链更糟。服务端是否返回
+    reasoning_content 取决于部署（client 保留了完整 body，两条路都在）。
 
 ## 6. 内建指标（观测口径）
 
@@ -334,6 +346,53 @@ python -m cotbuilder.judge --input <run输出目录> --output <judge目录> \
 - **复用同一套生产采样参数**（官方精确档 + thinking 开）：比对任务同样
   受益于思考链，口径与主流程一致。
 
+## 6d. judge 结果合并工具（merge.py，2026-08-03 新增）
+
+**定位**：纯离线只读工具，把 judge 改判结果并回原 run 数据，产出
+「规则 + judge」最终口径的数据集目录。**不在正常工作流内**。
+
+```bash
+python -m cotbuilder.merge --run <run目录> --judge <judge目录> \
+    --output <合并目录>        # --output 禁止与 --run 相同（argparse 报错）
+```
+
+设计决策：
+
+- **翻转 + 搬移 + 标签**（用户拍板）：judge 改判成功 → merged success；
+  维持原判/判失败 → merged failed；未覆盖的 run 记录原样。**不修改任何
+  已有字段**——judge_result 块的存在即「被判过」标签（见 §5.20）；
+- **只 join 不加工**：按 sample_id join、按 status 路由；orphaned
+  （judge 有 run 无）跳过、collision（与 run success 撞 id）以 run 为准，
+  均计数进 merge_summary.json 对账；
+- **反复 judge 循环**：merged 目录的 failed_samples.json 可直接作 judge
+  --input 再判一轮，再 merge 叠加（新 judge_result 覆盖旧块）；
+- 原子落盘（tmp + os.replace，仿 writer._full_rewrite），无 checkpoint
+  ——一次性转换，重跑即幂等。
+
+## 6e. ShareGPT 数据集转换工具（convert.py，2026-08-03 新增）
+
+**定位**：纯离线只读工具，把 run/merged 输出转为下游训练框架
+（LLaMA-Factory 等）可读的 ShareGPT 格式。**不在正常工作流内**。
+
+```bash
+python -m cotbuilder.convert --input <合并目录> --output train.json
+# 默认 gpt-mode=thinking + format=json；--gpt-mode raw|json，--format jsonl
+```
+
+设计决策：
+
+- **gpt 轮三形态**（默认 thinking，用户拍板）：`<thinking>推理链</thinking>`
+  + 纯 JSON / cot_response 原文 / 纯 predicted_json；推理链回收优先级与
+  「空则不加包裹」规则见 §5.21；
+- **容器默认 JSON 数组**（对齐用户 13 万条老数据微调输入），JSONL 可选；
+- **默认只读 success_samples.json**（训练数据语义；judge 改判成功的记录
+  经 merge 后就在 success 里，天然包含）；调试用 --input 指定文件；
+- human 轮 = original_sample 的 prompt（messages/conversations 两格式
+  与 generator 同取值源）；`<image>` 占位符缺失时前置；images 路径透传；
+- extractor 新增 find_json_span（纯加法，extract_json 改为委托它，
+  行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
+  共用同一份平衡括号扫描。
+
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 
 ```bash
@@ -351,6 +410,7 @@ python -m pytest tests/ -v -m slow    # 近真实尺度冒烟（真实 qpm=50、
 | 纯单元（fake clock/rng） | test_ratelimit / test_matcher / test_extractor | 限流不变量、退避分布、归一化正反例、JSON 提取 |
 | 组件集成（mock server） | test_client / test_generator / test_writer | 并发上限、paced、错误分类、寿命语义、断点恢复 |
 | 端到端指标 | test_batch / test_degraded | 请求数守恒、时间包络、并发不劣化、403 风暴恢复、降级场景（网络抖动致有效 QPM 略降）、兼容与口径 |
+| 后处理工具 | test_judge / test_merge / test_convert | judge 改判（mock server）；merge/convert 纯离线纯函数 + tmp_path 文件断言（无 mock） |
 | 冒烟 | test_smoke（slow） | 真实量级 qpm=50 + 秒级延迟 |
 
 mock 时间尺度策略：延迟默认 (4,30)s 贴近实测 OK 分布（2026-07-29 e2e：
@@ -374,6 +434,10 @@ python -m cotbuilder.cli --input samples.json --output out/ --api-key <key>
 ```
 
 ## 8. 数据兼容性（R3，不得破坏）
+
+> **全部 JSON 格式的字段级总览见 [formats.md](formats.md)**（输入样本 /
+> run 输出 / comparison_result / judge / merge / ShareGPT / 辅助文件）。
+> 本节只列不得破坏的兼容约束。
 
 - 输入：`messages` / `conversations` 两种样本格式均支持；
 - 输出：`success_samples.json` / `failed_samples.json`（JSON 数组）与

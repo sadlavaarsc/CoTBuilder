@@ -7,12 +7,13 @@
 > 更新 2026-07-29（二）：官方采样档默认 + LENGTH_TRUNCATED 分类 + usage 统计 + mock 双峰重校准，新增 10 项，总数 187 → **197**。
 > 更新 2026-07-29（三）：GATEWAY_ERROR 分类（封顶重试）+ request_timeout 收紧 400s + summary quality 块，新增 6 项，总数 197 → **203**。
 > 更新 2026-07-30：model judge 后处理工具（judge.py）+ mock judge_mode，新增 tests/test_judge.py（14 项），总数 203 → **217**。
+> 更新 2026-08-03：merge/convert 离线工具 + extractor.find_json_span（extract_json 委托重构），新增 tests/test_merge.py（7 项）+ tests/test_convert.py（11 项），总数 217 → **235**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **217 passed**，2 deselected | 44.3s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **235 passed**，2 deselected | 44.6s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -31,8 +32,10 @@
 | test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
+| test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
+| test_convert.py | 11 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **219** | |
+| **合计** | **237** | |
 
 ## 核心指标实测值
 
@@ -114,6 +117,25 @@
   `progress_log_interval=0.2` 实测输出 `in_flight=.. eff_qpm=..
   completed=.. rtt_p50=..` 行，=0 时实测无输出
 
+### merge / convert 离线工具（2026-08-03 新增）
+
+- **merge 语义**：overturned 记录进 merged success（judge_result 标签在、
+  comparison_result/predicted_json 原样不动）；upheld/network_exhausted
+  留 failed 且按 failure 正确细分计数；未覆盖 run failed 无标签；
+  orphaned/collision 跳过计数；merge_summary 计数与两文件记录数对账一致
+- **反复 judge 循环**：merged1 再判一轮 → 二次 merge 后 3 条全进
+  success、run_success 计数如实含首轮翻转（2）
+- **convert thinking 模式**：reasoning_content 优先（cot_response 文本
+  不出现）；回退路径剥离 JSON span + 围栏后恰为推理原文；cot 只有 JSON
+  时 gpt 轮无 <thinking> 包裹
+- **human/images**：messages 与 conversations 两种 original_sample 产出
+  相同 human 轮；<image> 占位符存在不重复、缺失自动前置；images 透传
+- **容器**：默认 json 数组 json.load 可读；jsonl 逐行 json.loads 可解析、
+  条数与 convert_summary 对账；缺 predicted_json/cot_response 记录跳过
+  计数正确
+- **extractor 重构无回归**：extract_json 委托 find_json_span 后原 12 项
+  测试全部通过（行为不变）
+
 ### model judge 后处理工具（2026-07-30 新增）
 
 - **改判成功搬移**：3 条 failed 记录（各 1 个失败 pair）+ judge_mode
@@ -150,7 +172,7 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-.venv/bin/python -m pytest tests/ -v            # 217 项指标测试（~44s）
+.venv/bin/python -m pytest tests/ -v            # 235 项指标测试（~45s）
 .venv/bin/python -m pytest tests/ -v -m slow    # 2 项近真实尺度冒烟（~26s）
 ```
 
