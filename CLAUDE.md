@@ -32,6 +32,7 @@
 - **生产参数调整（2026-07-30）**：prompt 调优 v2.3→**v2.4**（缺失字段改 null 填充、去 5 步推理指令，见 `generator.SYSTEM_PROMPT_V2_4` 与 investigation-01 追加五）；超时改生产实测推荐值 `request_timeout` 400→**120s**（修复死循环后合法响应 4–31s，>120s 几乎必死，早掐释放并发槽；代价是慢失败归 NETWORK_ERROR 烧网络账，design.md §5.17 变迁史）、`connect_timeout` 15→**30s**。另 403 风暴已基本定性为**骑线振荡**：服务端窗口配额=50 且被拒请求疑似也计数，骑线 50/min 时拒绝自我维持、靠退避排空，单次运行 ≥2 次风暴；客户端 pacing 无过错。生产对策 qpm_limit 40–45 + max_concurrent ≥20–25（investigation-01 追加六、design.md §5.18；原始日志归档 `doc/logs/metrics-2026-07-29-e2e.jsonl`）。
 - **model judge 改判工具（2026-07-30）**：`cotbuilder/judge.py`（`python -m cotbuilder.judge`）——可选后处理，**不进主流程**：读 run 输出目录的 failed_samples.json，只把 `comparison_result.differences` 中的失败 KV pair 发给同一模型纯文本改判（判定规则=定义什么是错，design.md §6c）；**保守改判**（全部 pair 判 match=true 才翻 success，缺 verdict 按未改判）；仅网络类错误退避重试；独立输出目录（checkpoint 续判）+ judge_summary.json。规则口径保持 STRICT 不变（§5.19）。测试 217（+14）。
 - **merge + convert 离线工具（2026-08-03）**：`cotbuilder/merge.py`（`python -m cotbuilder.merge`）把 judge 结果并回原 run——翻转+搬移+标签（`judge_result` 键存在=被判过，原字段不动），支持反复 judge 循环；`cotbuilder/convert.py`（`python -m cotbuilder.convert`）转 ShareGPT 训练数据——gpt 轮 = Qwen3 式 **`<think>`/`<answer>` 双标签**（全来源答案统一 `<answer>` 包裹，vLLM 一条规则切分；推理链回收 reasoning_content → cot_response 剥离，design.md §5.21），可切 raw（原文，不参与双标签契约）/json；容器默认 JSON 数组（对齐 13 万条老数据微调输入）可切 jsonl；human 末尾按实际是否含推理自动加 `/think` `/no_think` 软开关标志；`--strip-fences` 删 raw 模式 ```json 围栏；无 CoT 总预算 = `--mix-ratio` × CoT 条数，**`--include-failed`（upheld/mismatch/all 档）failed 派生 /no_think+GT 硬样本优先填充、`--mix` 外部 ShareGPT 补齐缺口**（failed 的 cot/predicted 永不作训练目标）。`cotbuilder/combine.py`（`python -m cotbuilder.combine`）多路径哑合并——任意 run/judge 目录或单文件按 sample_id 去重（后赢）拼成标准两文件目录，可直接喂 convert/judge（与 merge 的语义合并分工见 design.md §6f）。三者纯离线只读（§5.20）。**全部 JSON 格式总览见 `doc/formats.md`**。测试 253（+36）。
+- **闭环文档 + README（2026-08-03）**：`doc/workflow.md`——从切好的样本到 train.json 的四步闭环（cli → judge → merge → convert，多批次 combine），含推荐参数表（qpm 40 / 并发 25 / 采样默认官方档）与每步验收检查点；**数据切分明确为上游职责、不在本项目范围**。根目录 `README.md`——项目简介、工具链图、Quick Start（venv + 测试 + 四步命令）、文档索引。
 - **原版 comparator 已对齐（2026-07-28）**：拿到缺失的 `oldCode/RobustJSONComparator.py`（只读）。原版宽松规则实现为 `MatcherConfig` 开关、默认关闭（默认 = audit-02 规格）；`Matcher.legacy()` / CLI `--legacy-matcher` 对齐原版行为；`comparison_result` schema 为原版超集。逐项对照与原版 4 个已修正 bug 见 `doc/comparator-compat.md`（改 matcher 前必读）。测试总数 173（171 + 2 slow）。
 
 ## 重构目标（已达成）
@@ -111,7 +112,9 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
+cat README.md                       # 项目简介 + Quick Start + 文档索引
 cat oldCode/CoTBuilder-V2.py        # 参考实现（只读）
+cat doc/workflow.md                 # 闭环流程（四步命令 + 推荐参数 + 验收检查点）
 cat doc/design.md                   # 设计文档（改并发/限流/匹配前必读 §5 防误解清单）
 cat doc/formats.md                  # 全部 JSON 格式总览（输入/run/judge/merge/ShareGPT）
 cat doc/test-results.md             # 测试结果档案（实测指标与复现方法）
