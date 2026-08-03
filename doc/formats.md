@@ -20,8 +20,14 @@
                                                           (+ convert_summary.json)
 ```
 
-judge / merge / convert 均为**独立可选工具**，不进主流程；merge/convert
-纯离线只读源目录。
+judge / merge / combine / convert 均为**独立可选工具**，不进主流程；
+merge/combine/convert 纯离线只读源目录。
+
+**combine（多路径哑合并）**：`python -m cotbuilder.combine --inputs
+<路径...> --output <目录>`——把任意多个 run/judge 目录或单文件按
+sample_id 去重（后路径覆盖前路径）拼接成标准两文件目录 +
+combine_summary.json；不解读记录内容，输出可直接喂 convert/judge。
+与 merge 的分工见 design.md §6f。
 
 ---
 
@@ -194,6 +200,7 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 | `summary.json` | batch | 计数 + 完整 config + metrics（quota/outcomes/token_usage/performance）+ gt_analysis + quality | design.md §6 |
 | `judge_summary.json` | judge | 改判计数 + overturn_rate + config + metrics | design.md §6c |
 | `merge_summary.json` | merge | 合并计数对账 | §5 本文 |
+| `combine_summary.json` | combine | 多路径拼接计数（total_in/deduped/final_*） | design.md §6f |
 | `convert_summary.json` | convert | 转换计数 + mode/format | §6 本文 |
 | `metrics.jsonl` | metrics | 逐请求事件流（ts/sample_id/kind/quota_kind/wait_limiter/wait_slot/rtt/backoff） | design.md §6b |
 

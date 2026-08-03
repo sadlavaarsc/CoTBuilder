@@ -409,6 +409,27 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
   行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
   共用同一份平衡括号扫描。
 
+## 6f. 多路径结果合并工具（combine.py，2026-08-03 新增）
+
+**定位**：纯离线只读的**哑合并**——把分散在多个路径的结果（run 目录 /
+judge 目录 / 单文件）拼接去重成标准数据集目录，可直接作 convert
+--input、judge --input 或下一轮 combine 的输入。
+
+```bash
+python -m cotbuilder.combine --inputs <run1目录> <judge目录> <extra.json> \
+    --output <合并目录>     # --output 禁止与任一输入目录相同
+```
+
+设计决策：
+
+- **与 merge.py 的分工**：merge = judge↔run 的语义合并（两目录 join、
+  翻转+搬移+标签）；combine = 任意多路径拼接去重，**不解读记录内容**；
+- **去重后赢**：同一 sample_id 以最后出现的输入路径为准（后面的视为
+  更新），顺序按首次出现；无 sample_id 记录无法去重全部保留并计数；
+- 目录输入读 success+failed 两个文件（缺文件按空 + warning），文件
+  输入直读；输出按 status 路由写 success/failed_samples.json +
+  combine_summary.json 对账（total_in/deduped/no_sample_id/final_*）。
+
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 
 ```bash

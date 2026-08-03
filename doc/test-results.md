@@ -11,12 +11,13 @@
 > 更新 2026-08-03（二）：convert 追加 strip-fences / think 软开关标志 / 无CoT按比例混入，test_convert.py 新增 7 项，总数 235 → **242**。
 > 更新 2026-08-03（三）：convert 追加 --include-failed（failed 派生 /no_think+GT 硬样本，无CoT预算统一、failed优先填充/mix补齐），test_convert.py 新增 5 项，总数 242 → **247**。
 > 更新 2026-08-03（四）：gpt 轮改 Qwen3 式 <think>/<answer> 双标签（全来源答案统一 <answer> 包裹，mix sanitize 剥旧标签后统一重包），test_convert.py 新增 1 项（+既有断言改写），总数 247 → **248**。
+> 更新 2026-08-03（五）：combine 多路径哑合并工具（combine.py），新增 tests/test_combine.py（5 项），总数 248 → **253**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **248 passed**，2 deselected | 44.6s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **253 passed**，2 deselected | 44.6s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -36,9 +37,10 @@
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
+| test_combine.py | 5 | 多路径哑合并：去重后赢/无 id 全保留、目录+文件混合输入路由与对账、缺文件容错、输出可直接喂 convert |
 | test_convert.py | 24 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **249** | |
+| **合计** | **255** | |
 
 ## 核心指标实测值
 
@@ -152,6 +154,15 @@
   终态跳过；派生样本 gpt == GT 序列化、不含 predicted 错误值、无
   thinking 段、/no_think；预算 3 + failed 2 → mix 补 1（优先填充）；
   eligible 超预算按预算抽样且种子确定；缺 failed 文件预算全留 mix
+
+### combine 多路径合并（2026-08-03 新增）
+
+- **去重后赢**：同 sample_id 内容以最后输入路径为准、顺序按首次出现；
+  无 id 记录全部保留计数
+- **混合输入**：目录（success+failed 都读）+ 单文件混合，按 status 路由
+  输出，combine_summary 与两文件记录数对账一致；缺 failed 文件容错
+- **格式契约**：合并输出目录直接作 convert --input 可转换（2 条成功
+  样本全出、字段齐全）
 
 ### model judge 后处理工具（2026-07-30 新增）
 
