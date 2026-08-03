@@ -395,9 +395,13 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
   `/no_think`，与 §5.21「不拼假推理链」同一原则；
 - **--strip-fences**：raw 模式删 ```json 围栏标记保留内容（teacher
   模型爱自带围栏）；
-- **--mix 无 CoT 混入**：按比例（ratio × CoT 条数）从外部 ShareGPT
-  混入，固定种子抽样可复现；混入样本自动剥 <thinking> 段 + 加
-  `/no_think`——无 CoT 数据与 CoT 数据的标志口径因此一致；
+- **--mix 无 CoT 混入 + --include-failed failed 派生（2026-08-03）**：
+  无 CoT 总预算 = mix_ratio × CoT 条数，**failed 派生优先填充、外部
+  mix 补齐缺口**（用户拍板：upheld 硬样本优先级高于随机老数据——
+  它是模型真实失败分布的 hard example mining）。failed 派生 =
+  /no_think + GT 答案；档位 upheld（双重确认最干净，默认）/ mismatch
+  / all。**failed 的 cot_response/predicted_json 永不作训练目标**
+  （与 §5.21 同原则：错误推理拼正确答案是负样本）；
 - extractor 新增 find_json_span（纯加法，extract_json 改为委托它，
   行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
   共用同一份平衡括号扫描。

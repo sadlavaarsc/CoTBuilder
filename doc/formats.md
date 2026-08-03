@@ -162,9 +162,17 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
   是否含推理**自动加 `/think`（thinking 模式有推理链、raw 模式）或
   `/no_think`（json 模式、推理链为空）；`--think-flag` / `--no-think-flag`
   自定义文案，空串禁用；已有旧标志行会被剥掉后重加（不重复不矛盾）；
-- **无 CoT 混入**（2026-08-03 追加）：`--mix <shareGPT文件> --mix-ratio R`
-  → 从外部 ShareGPT 数据（.json/.jsonl）混入 `int(R × CoT 条数)` 条
-  （固定种子 42 抽样可复现，超体量全取），追加在 CoT 样本之后；每条
+- **无 CoT 预算与填充优先级**（2026-08-03 追加）：`--mix-ratio R` 定义无
+  CoT 总条数 = `int(R × CoT 条数)`；**failed 派生优先填充、填不满由
+  `--mix` 外部数据补齐**，排布顺序 CoT → failed 派生 → mix 混入
+  （抽样固定种子 42 可复现）；
+- **failed 派生入训**（`--include-failed SOURCE`）：把 failed_samples.json
+  中符合条件的记录转为 `/no_think` + **GT 答案**的硬样本。档位：
+  `upheld`（默认，judge 维持原判=规则+模型双重确认）/ `mismatch`
+  （有规则 diff 证据）/ `all`（任何带 GT dict 的记录，无 GT 的终态
+  失败跳过）。**failed 的 cot_response/predicted_json 永不作训练目标**
+  （错误产物，拼「错误推理+正确答案」是负样本）；
+- **外部无 CoT 混入**（`--mix <shareGPT文件>`）：.json/.jsonl 均可，每条
   混入样本自动剥 `<thinking>` 段 + human 末尾加 `/no_think`；
 - human 轮 = original_sample 的 prompt；`<image>` 缺失时自动前置（images 非空）；
   `images` 原样透传（本地路径列表，训练框架自行加载）；

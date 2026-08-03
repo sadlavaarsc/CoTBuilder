@@ -9,12 +9,13 @@
 > 更新 2026-07-30：model judge 后处理工具（judge.py）+ mock judge_mode，新增 tests/test_judge.py（14 项），总数 203 → **217**。
 > 更新 2026-08-03：merge/convert 离线工具 + extractor.find_json_span（extract_json 委托重构），新增 tests/test_merge.py（7 项）+ tests/test_convert.py（11 项），总数 217 → **235**。
 > 更新 2026-08-03（二）：convert 追加 strip-fences / think 软开关标志 / 无CoT按比例混入，test_convert.py 新增 7 项，总数 235 → **242**。
+> 更新 2026-08-03（三）：convert 追加 --include-failed（failed 派生 /no_think+GT 硬样本，无CoT预算统一、failed优先填充/mix补齐），test_convert.py 新增 5 项，总数 242 → **247**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **242 passed**，2 deselected | 44.6s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **247 passed**，2 deselected | 44.5s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -34,9 +35,9 @@
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
-| test_convert.py | 18 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性 |
+| test_convert.py | 23 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **244** | |
+| **合计** | **249** | |
 
 ## 核心指标实测值
 
@@ -144,6 +145,11 @@
 - **无 CoT 混入**：ratio=1.0 混入等量（3→3）、ratio=0.5 向下取整（1）、
   超体量全取并计数如实；混入样本残留 <thinking> 段剥净、human 末尾
   /no_think；jsonl 源可读；固定种子两次运行选中样本完全一致
+- **failed 派生入训**：upheld 档只选 judge 维持原判（judge_error/未判
+  排除）；mismatch 档选有 diff 证据（含未判）；all 档含 infra、无 GT
+  终态跳过；派生样本 gpt == GT 序列化、不含 predicted 错误值、无
+  thinking 段、/no_think；预算 3 + failed 2 → mix 补 1（优先填充）；
+  eligible 超预算按预算抽样且种子确定；缺 failed 文件预算全留 mix
 
 ### model judge 后处理工具（2026-07-30 新增）
 

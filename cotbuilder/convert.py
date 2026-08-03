@@ -29,7 +29,16 @@ gpt 轮三种形态（--gpt-mode，默认 thinking，2026-08-03 用户拍板）�
   （teacher 模型爱自带围栏），保留 JSON 内容；
 - **--mix 无 CoT 混入**：--mix <shareGPT文件> --mix-ratio R，从外部
   ShareGPT 数据混入 int(R × CoT 条数) 条（固定种子抽样可复现），每条
-  自动剥 <thinking> 段 + 加 no-think 标志。
+  自动剥 <thinking> 段 + 加 no-think 标志；
+- **--include-failed failed 派生入训**（2026-08-03 用户拍板）：把输入
+  目录 failed_samples.json 中符合条件的记录转为 /no_think + **GT 答案**
+  的硬样本（hard example mining）。档位：upheld（judge 维持原判，
+  规则+模型双重确认，默认）/ mismatch（有规则 diff 证据）/ all（任何
+  带 GT dict）。**无 CoT 预算统一控制**：总条数 = mix_ratio × CoT 条数，
+  **failed 派生优先填充、填不满由 --mix 外部数据补齐**。
+  防误解（design.md §5.21 同原则）：failed 记录的 cot_response /
+  predicted_json 是与 GT 不一致的错误产物，**永不作训练目标**——
+  拼「错误推理 + 正确答案」是负样本。
 
 默认只读输入目录的 success_samples.json（训练数据语义；judge 改判成功
 的记录经 merge 后就在 success 里，天然包含）。调试需求用 --input 直接
@@ -207,6 +216,56 @@ def sanitize_no_cot(sample: Dict[str, Any],
     return sample
 
 
+# failed 派生档位（--include-failed）：按 GT 可信度分层。
+# upheld = judge 维持原判（规则+模型双重确认 GT 对、模型错，最干净）；
+# mismatch = 有规则 diff 证据（含 upheld + 未判 MISMATCH，GT 未经复核）；
+# all = 任何记录（转换时再按有无 GT dict 过滤，含 infra 失败的普通样本）。
+FAILED_SOURCES = ("upheld", "mismatch", "all")
+
+
+def _failed_eligible(record: Dict[str, Any], source: str) -> bool:
+    if source == "upheld":
+        jr = record.get("judge_result")
+        return (isinstance(jr, dict) and jr.get("overturned") is False
+                and "failure" not in jr)
+    if source == "mismatch":
+        comparison = record.get("comparison_result")
+        return (isinstance(comparison, dict)
+                and bool(comparison.get("differences")))
+    return True   # all
+
+
+def failed_to_sharegpt(record: Dict[str, Any],
+                       think_flag: str = DEFAULT_THINK_FLAG,
+                       no_think_flag: str = DEFAULT_NO_THINK_FLAG
+                       ) -> Optional[Dict[str, Any]]:
+    """把一条 failed 记录转成 /no_think + GT 答案的硬样本；无 GT dict 跳过。
+
+    gpt 轮 = ground_truth 序列化（与成功样本的答案格式一致）；**绝不使用**
+    该记录的 cot_response / predicted_json（错误产物，见模块 docstring）。
+    """
+    gt = record.get("ground_truth")
+    if not isinstance(gt, dict):
+        return None
+    original = record.get("original_sample") or {}
+    human = _human_text(original)
+    images = original.get("images") or []
+    if images and "<image>" not in human:
+        human = "<image>\n" + human
+    human = _apply_think_flag(
+        human, no_think_flag,
+        all_flags=(think_flag, no_think_flag,
+                   DEFAULT_THINK_FLAG, DEFAULT_NO_THINK_FLAG))
+    return {
+        "conversations": [
+            {"from": "human", "value": human},
+            {"from": "gpt",
+             "value": json.dumps(gt, ensure_ascii=False, indent=2)},
+        ],
+        "images": images,
+    }
+
+
 # ----------------------------------------------------------------------
 # 文件读写与批处理
 
@@ -231,13 +290,14 @@ def run_convert(input_path: str, output_path: str,
                 strip_fences: bool = False,
                 mix_path: Optional[str] = None, mix_ratio: float = 1.0,
                 think_flag: str = DEFAULT_THINK_FLAG,
-                no_think_flag: str = DEFAULT_NO_THINK_FLAG) -> Dict[str, Any]:
+                no_think_flag: str = DEFAULT_NO_THINK_FLAG,
+                include_failed: Optional[str] = None) -> Dict[str, Any]:
     """执行转换并落盘，返回 convert_summary 字典。
 
-    mix_path 给定时，从该文件按比例混入无 CoT ShareGPT 样本：混入条数 =
-    int(mix_ratio × CoT 转换条数)（超出混入文件体量则全取并 warning），
-    每条经 sanitize_no_cot 调整（去 thinking 段 + no_think 标志），
-    追加在 CoT 样本之后（下游 shuffle 交给训练框架）。
+    无 CoT 预算（include_failed 或 mix_path 给定时启用）：总条数 =
+    int(mix_ratio × CoT 转换条数)，**failed 派生优先填充、填不满由
+    mix_path 外部数据补齐**（均未给则预算为 0）。抽样固定种子 42 可复现，
+    排布顺序：CoT 样本 → failed 派生 → mix 混入（shuffle 交给训练框架）。
     """
     records = _load_records(input_path)
 
@@ -253,15 +313,41 @@ def run_convert(input_path: str, output_path: str,
             continue
         samples.append(sample)
 
+    rng = random.Random(42)   # 固定种子：同输入可复现（对齐 cli.load_samples）
+    budget = (int(mix_ratio * len(samples))
+              if (include_failed or mix_path) else 0)
+
+    # 优先：failed 派生硬样本（/no_think + GT 答案）
+    failed_used = 0
+    if include_failed and budget > 0:
+        failed_path = (os.path.join(input_path, "failed_samples.json")
+                       if os.path.isdir(input_path)
+                       else os.path.join(os.path.dirname(
+                           os.path.abspath(input_path)), "failed_samples.json"))
+        failed_records = _load_sharegpt(failed_path) \
+            if os.path.exists(failed_path) else []
+        if not failed_records:
+            logger.warning("failed 记录为空或文件不存在（%s），预算全部留给 mix",
+                           failed_path)
+        eligible = [s for r in failed_records
+                    if _failed_eligible(r, include_failed)
+                    for s in [failed_to_sharegpt(r, think_flag, no_think_flag)]
+                    if s is not None]
+        take = min(budget, len(eligible))
+        chosen = rng.sample(eligible, take) if take < len(eligible) \
+            else eligible
+        samples.extend(chosen)
+        failed_used = len(chosen)
+
+    # 补齐：外部无 CoT 数据
     mixed_in = 0
-    if mix_path:
+    remaining = budget - failed_used
+    if mix_path and remaining > 0:
         pool = _load_sharegpt(mix_path)
-        take = int(mix_ratio * len(samples))
-        if take > len(pool):
+        take = min(remaining, len(pool))
+        if remaining > len(pool):
             logger.warning("混入需求量 %d 超出混入文件体量 %d，全部取",
-                           take, len(pool))
-            take = len(pool)
-        rng = random.Random(42)   # 固定种子：同输入可复现（对齐 cli.load_samples）
+                           remaining, len(pool))
         chosen = rng.sample(pool, take) if take < len(pool) else list(pool)
         for sample in chosen:
             samples.append(sanitize_no_cot(sample, no_think_flag, think_flag))
@@ -278,6 +364,7 @@ def run_convert(input_path: str, output_path: str,
             f.write("\n")
     os.replace(tmp, output_path)
 
+    cot_count = len(samples) - failed_used - mixed_in
     summary: Dict[str, Any] = {
         "input": os.path.abspath(input_path),
         "output": os.path.abspath(output_path),
@@ -287,10 +374,12 @@ def run_convert(input_path: str, output_path: str,
         "think_flag": think_flag,
         "no_think_flag": no_think_flag,
         "total_records": len(records),
-        "converted": len(samples) - mixed_in,
+        "converted": cot_count,
         "skipped": skipped,
+        "no_cot_budget": budget,
+        "include_failed": include_failed,
+        "failed_used": failed_used,
         "mixed_in": mixed_in,
-        "mix_ratio": mix_ratio if mix_path else None,
         "mix_source": os.path.abspath(mix_path) if mix_path else None,
         "total_samples": len(samples),
     }
@@ -301,9 +390,9 @@ def run_convert(input_path: str, output_path: str,
         f.write("\n")
     os.replace(summary_path + ".tmp", summary_path)
 
-    logger.info("Converted %d/%d records + %d mixed (%s mode, %s) -> %s",
-                len(samples) - mixed_in, len(records), mixed_in,
-                mode, fmt, output_path)
+    logger.info("Converted %d/%d records + %d failed-derived + %d mixed "
+                "(%s mode, %s) -> %s", cot_count, len(records), failed_used,
+                mixed_in, mode, fmt, output_path)
     return summary
 
 
@@ -331,8 +420,14 @@ def main() -> None:
                         help="混入外部无 CoT ShareGPT 数据（.json/.jsonl），"
                              "自动去 thinking 段 + 加 no-think 标志")
     parser.add_argument("--mix-ratio", type=float, default=1.0,
-                        help="混入条数 = ratio × CoT 转换条数（默认 1.0；"
-                             "超出混入文件体量则全取）")
+                        help="无 CoT 总预算 = ratio × CoT 转换条数（默认 1.0）；"
+                             "failed 派生优先填充，不足由 --mix 补齐")
+    parser.add_argument("--include-failed", nargs="?", const="upheld",
+                        choices=FAILED_SOURCES, default=None,
+                        metavar="SOURCE",
+                        help="failed 样本派生入训（/no_think + GT 答案硬样本）："
+                             "upheld（默认，judge 维持原判）/ mismatch"
+                             "（有规则 diff 证据）/ all（任何带 GT 的记录）")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -345,14 +440,16 @@ def main() -> None:
                           strip_fences=args.strip_fences,
                           mix_path=args.mix, mix_ratio=args.mix_ratio,
                           think_flag=args.think_flag,
-                          no_think_flag=args.no_think_flag)
+                          no_think_flag=args.no_think_flag,
+                          include_failed=args.include_failed)
 
     print("\n" + "=" * 50)
     print("CoT Convert Summary")
     print("=" * 50)
     print(f"Total records: {summary['total_records']}")
     print(f"Converted (CoT): {summary['converted']}")
-    print(f"Mixed in (无 CoT): {summary['mixed_in']}")
+    print(f"Failed-derived (无CoT硬样本): {summary['failed_used']}")
+    print(f"Mixed in (外部无CoT): {summary['mixed_in']}")
     print(f"Skipped (缺素材): {summary['skipped']}")
     print(f"Total samples: {summary['total_samples']}")
     print(f"Mode / format: {summary['gpt_mode']} / {summary['format']}")

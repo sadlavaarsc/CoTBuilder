@@ -238,3 +238,131 @@ class TestMix:
         run_convert(input_dir, out2, mix_path=str(mixl), mix_ratio=0.67)
         assert json.loads((tmp_path / "a.json").read_text()) == \
                json.loads((tmp_path / "b.json").read_text())
+
+
+WRONG_GT = {"发票号码": "WRONG", "总价": "¥5.83"}
+
+
+def failed_rec(sid, kind):
+    """构造 failed 记录。kind: upheld / mismatch / judge_error / infra / no_gt。"""
+    rec = {"sample_id": sid, "status": "failed", "attempts": 3,
+           "original_sample": {"id": sid,
+                               "messages": [{"role": "user", "content": "<image>\n提取"},
+                                            {"role": "assistant", "content": GT_INLINE}],
+                               "images": ["/tmp/f.jpg"]},
+           "cot_response": COT_WITH_JSON,
+           "predicted_json": WRONG_GT,
+           "ground_truth": GT,
+           "comparison_result": {"is_match": False, "differences": [
+               {"field": "发票号码", "type": "mismatch",
+                "predicted": "WRONG", "ground_truth": "J123"}]},
+           "error_type": "MISMATCH"}
+    if kind == "upheld":
+        rec["judge_result"] = {"overturned": False, "pairs": [], "attempts": 1}
+    elif kind == "judge_error":
+        rec["judge_result"] = {"overturned": False, "pairs": [], "attempts": 5,
+                               "failure": "network_exhausted"}
+    elif kind == "infra":
+        for k in ("cot_response", "predicted_json", "comparison_result"):
+            del rec[k]
+        rec["error_type"] = "NETWORK_ERROR"
+    elif kind == "no_gt":
+        for k in ("cot_response", "predicted_json",
+                  "ground_truth", "comparison_result"):
+            del rec[k]
+        rec["error_type"] = "LENGTH_TRUNCATED"
+    return rec
+
+
+class TestIncludeFailed:
+    def _setup(self, tmp_path, failed_records, n_cot=3, with_mix=5):
+        d = tmp_path / "merged"
+        d.mkdir()
+        (d / "success_samples.json").write_text(json.dumps(
+            [make_record(f"c{i}") for i in range(n_cot)], ensure_ascii=False))
+        (d / "failed_samples.json").write_text(
+            json.dumps(failed_records, ensure_ascii=False))
+        mix_path = None
+        if with_mix:
+            mix = tmp_path / "nocot.json"
+            mix.write_text(json.dumps(
+                [no_cot_sample(f"m{i}") for i in range(with_mix)],
+                ensure_ascii=False))
+            mix_path = str(mix)
+        return str(d), mix_path
+
+    def test_upheld_filter_and_gt_answer(self, tmp_path):
+        """upheld 档：只选 judge 维持原判；gpt = GT 答案（绝不用 predicted）。"""
+        input_dir, _ = self._setup(tmp_path, [
+            failed_rec("u1", "upheld"), failed_rec("m1", "mismatch"),
+            failed_rec("e1", "judge_error")])
+        out = str(tmp_path / "train.json")
+        summary = run_convert(input_dir, out, include_failed="upheld",
+                              mix_ratio=10.0)
+
+        assert summary["failed_used"] == 1  # 只有 u1（m1 未判、e1 有 failure）
+        derived = json.loads((tmp_path / "train.json").read_text())[3]
+        human, gpt = derived["conversations"]
+        assert gpt["value"] == GT_JSON              # GT 答案
+        assert "WRONG" not in gpt["value"]          # predicted_json 永不入训
+        assert "<thinking>" not in gpt["value"]     # 错误推理链永不入训
+        assert human["value"].endswith("\n/no_think")
+        assert derived["images"] == ["/tmp/f.jpg"]
+
+    def test_mismatch_and_all_filters(self, tmp_path):
+        """mismatch 档选有 diff 证据的（含未判 MISMATCH）；all 档含 infra、
+        无 GT 的终态失败跳过。"""
+        input_dir, _ = self._setup(tmp_path, [
+            failed_rec("u1", "upheld"), failed_rec("m1", "mismatch"),
+            failed_rec("i1", "infra"), failed_rec("t1", "no_gt")])
+        out = str(tmp_path / "t.json")
+        s1 = run_convert(input_dir, out, include_failed="mismatch",
+                         mix_ratio=10.0)
+        assert s1["failed_used"] == 2   # u1 + m1；i1 无 diff 证据
+
+        s2 = run_convert(input_dir, out, include_failed="all",
+                         mix_ratio=10.0)
+        assert s2["failed_used"] == 3   # u1 + m1 + i1（有 GT）；t1 无 GT 跳过
+
+    def test_priority_fill_failed_first_mix_complements(self, tmp_path):
+        """预算 = ratio × CoT；failed 优先填充，缺口由 mix 补齐；排布有序。"""
+        input_dir, mix_path = self._setup(tmp_path, [
+            failed_rec("u1", "upheld"), failed_rec("u2", "upheld")],
+            n_cot=3, with_mix=5)
+        out = str(tmp_path / "train.json")
+        summary = run_convert(input_dir, out, include_failed="upheld",
+                              mix_path=mix_path, mix_ratio=1.0)
+
+        assert summary["no_cot_budget"] == 3
+        assert summary["failed_used"] == 2      # 预算 3，failed 只有 2
+        assert summary["mixed_in"] == 1         # 缺口 1 由 mix 补齐
+        data = json.loads((tmp_path / "train.json").read_text())
+        assert len(data) == 6
+        assert data[3]["images"] == ["/tmp/f.jpg"]   # failed 派生在前
+        assert data[5]["images"] == []               # mix 混入在后
+
+    def test_failed_over_budget_sampled_deterministic(self, tmp_path):
+        """eligible 超预算：按预算抽样，固定种子两次一致。"""
+        input_dir, _ = self._setup(tmp_path, [
+            failed_rec(f"u{i}", "upheld") for i in range(5)], n_cot=2)
+        out1, out2 = str(tmp_path / "a.json"), str(tmp_path / "b.json")
+        s1 = run_convert(input_dir, out1, include_failed="upheld",
+                         mix_ratio=1.0)   # 预算 2 < eligible 5
+        s2 = run_convert(input_dir, out2, include_failed="upheld",
+                         mix_ratio=1.0)
+        assert s1["failed_used"] == 2
+        assert json.loads((tmp_path / "a.json").read_text()) == \
+               json.loads((tmp_path / "b.json").read_text())
+
+    def test_missing_failed_file_budget_goes_to_mix(self, tmp_path):
+        """无 failed_samples.json：预算全部留给 mix，不报错。"""
+        d = tmp_path / "merged"
+        d.mkdir()
+        (d / "success_samples.json").write_text(json.dumps(
+            [make_record(f"c{i}") for i in range(2)], ensure_ascii=False))
+        mix = tmp_path / "nocot.json"
+        mix.write_text(json.dumps([no_cot_sample("m0")], ensure_ascii=False))
+        out = str(tmp_path / "train.json")
+        summary = run_convert(str(d), out, include_failed="upheld",
+                              mix_path=str(mix), mix_ratio=1.0)
+        assert summary["failed_used"] == 0 and summary["mixed_in"] == 1
