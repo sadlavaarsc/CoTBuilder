@@ -15,6 +15,7 @@ from cotbuilder.convert import run_convert, to_sharegpt
 
 GT = {"发票号码": "J123", "总价": "¥5.83"}
 GT_JSON = json.dumps(GT, ensure_ascii=False, indent=2)
+GT_ANSWER = f"<answer>{GT_JSON}</answer>"
 GT_INLINE = json.dumps(GT, ensure_ascii=False)
 COT_TEXT = "先看发票号码，再看总价，逐项核对。"
 COT_WITH_JSON = f"{COT_TEXT}\n```json\n{GT_INLINE}\n```"
@@ -50,29 +51,36 @@ class TestToShareGPT:
         """思考通道存在时优先 reasoning_content，不取 cot_response 文本。"""
         rec = make_record(reasoning="  模型的内部思考链。  ")
         gpt = to_sharegpt(rec)["conversations"][1]["value"]
-        assert gpt == f"<thinking>模型的内部思考链。</thinking>\n{GT_JSON}"
+        assert gpt == f"<think>模型的内部思考链。</think>\n{GT_ANSWER}"
 
     def test_thinking_falls_back_to_cot_strip(self):
         """无 reasoning_content：cot_response 剥离 JSON span 与围栏作推理链。"""
         gpt = to_sharegpt(make_record())["conversations"][1]["value"]
-        assert gpt == f"<thinking>{COT_TEXT}</thinking>\n{GT_JSON}"
+        assert gpt == f"<think>{COT_TEXT}</think>\n{GT_ANSWER}"
 
-    def test_empty_cot_no_wrapper(self):
-        """剥离后推理链为空（cot_response 只有 JSON）：不加 <thinking> 包裹。"""
+    def test_empty_cot_no_think_block(self):
+        """剥离后推理链为空（cot_response 只有 JSON）：仅 <answer>，无 <think> 段。"""
         rec = make_record(cot=GT_INLINE)
         gpt = to_sharegpt(rec)["conversations"][1]["value"]
-        assert gpt == GT_JSON
-        assert "<thinking>" not in gpt
+        assert gpt == GT_ANSWER
+        assert "<think>" not in gpt
 
     def test_raw_mode_verbatim(self):
-        """raw 模式：gpt 轮 = cot_response 原文不动。"""
+        """raw 模式：gpt 轮 = cot_response 原文不动（不参与双标签契约）。"""
         gpt = to_sharegpt(make_record(), mode="raw")["conversations"][1]["value"]
         assert gpt == COT_WITH_JSON
 
     def test_json_mode_pure_answer(self):
-        """json 模式：gpt 轮 = 纯 predicted_json 序列化。"""
+        """json 模式：gpt 轮 = <answer> 包裹的纯 predicted_json。"""
         gpt = to_sharegpt(make_record(), mode="json")["conversations"][1]["value"]
-        assert gpt == GT_JSON
+        assert gpt == GT_ANSWER
+
+    def test_custom_tags(self):
+        """--think-tag/--answer-tag 自定义标签名。"""
+        gpt = to_sharegpt(make_record(), think_tag="reasoning",
+                          answer_tag="result")["conversations"][1]["value"]
+        assert gpt == (f"<reasoning>{COT_TEXT}</reasoning>\n"
+                       f"<result>{GT_JSON}</result>")
 
     @pytest.mark.parametrize("fmt", ["messages", "conversations"])
     def test_human_both_formats_and_images(self, fmt):
@@ -178,10 +186,12 @@ class TestThinkFlags:
         assert human.count("/think") == 1 and "/no_think" not in human
 
 
-def no_cot_sample(sid, with_thinking_block=False):
+def no_cot_sample(sid, with_thinking_block=False, qwen3_format=False):
     gpt = "答案是 42"
     if with_thinking_block:
         gpt = "<thinking>残留推理</thinking>\n答案是 42"
+    elif qwen3_format:
+        gpt = "<think>残留推理</think>\n<answer>答案是 42</answer>"
     return {"conversations": [{"from": "human", "value": f"问题 {sid}"},
                               {"from": "gpt", "value": gpt}],
             "images": []}
@@ -195,12 +205,13 @@ class TestMix:
             [make_record(f"c{i}") for i in range(n_cot)], ensure_ascii=False))
         mix = tmp_path / "nocot.json"
         mix.write_text(json.dumps(
-            [no_cot_sample(f"m{i}", with_thinking_block=(i == 0))
+            [no_cot_sample(f"m{i}", with_thinking_block=(i == 0),
+                           qwen3_format=(i == 1))
              for i in range(n_mix)], ensure_ascii=False))
         return str(d), str(mix)
 
     def test_mix_ratio_and_sanitize(self, tmp_path):
-        """ratio=1.0 → 混入 CoT 条数等量；混入样本去 thinking 段 + /no_think。"""
+        """ratio=1.0 → 混入 CoT 条数等量；混入样本剥推理段、统一 <answer> 重包。"""
         input_dir, mix_path = self._setup(tmp_path)
         out = str(tmp_path / "train.json")
         summary = run_convert(input_dir, out, mix_path=mix_path, mix_ratio=1.0)
@@ -208,11 +219,12 @@ class TestMix:
         assert summary["converted"] == 3 and summary["mixed_in"] == 3
         assert summary["total_samples"] == 6
         data = json.loads((tmp_path / "train.json").read_text())
-        mixed = data[3:]
-        for s in mixed:
+        for s in data[3:]:
             human, gpt = s["conversations"]
             assert human["value"].endswith("\n/no_think")
-            assert "<thinking>" not in gpt["value"]  # 残留 thinking 段已剥
+            assert "<think" not in gpt["value"]         # 推理段已剥（两种旧标签）
+            assert gpt["value"] == "<answer>答案是 42</answer>"  # 统一重包
+            assert gpt["value"].count("<answer>") == 1  # 已有 <answer> 不双包
 
     def test_mix_ratio_partial_and_overflow(self, tmp_path):
         """ratio=0.5 → int(0.5×3)=1 条；需求超体量 → 全取并计数如实。"""
@@ -303,9 +315,9 @@ class TestIncludeFailed:
         assert summary["failed_used"] == 1  # 只有 u1（m1 未判、e1 有 failure）
         derived = json.loads((tmp_path / "train.json").read_text())[3]
         human, gpt = derived["conversations"]
-        assert gpt["value"] == GT_JSON              # GT 答案
+        assert gpt["value"] == GT_ANSWER            # <answer> 包裹的 GT 答案
         assert "WRONG" not in gpt["value"]          # predicted_json 永不入训
-        assert "<thinking>" not in gpt["value"]     # 错误推理链永不入训
+        assert "<think" not in gpt["value"]         # 错误推理链永不入训
         assert human["value"].endswith("\n/no_think")
         assert derived["images"] == ["/tmp/f.jpg"]
 

@@ -10,12 +10,13 @@
 > 更新 2026-08-03：merge/convert 离线工具 + extractor.find_json_span（extract_json 委托重构），新增 tests/test_merge.py（7 项）+ tests/test_convert.py（11 项），总数 217 → **235**。
 > 更新 2026-08-03（二）：convert 追加 strip-fences / think 软开关标志 / 无CoT按比例混入，test_convert.py 新增 7 项，总数 235 → **242**。
 > 更新 2026-08-03（三）：convert 追加 --include-failed（failed 派生 /no_think+GT 硬样本，无CoT预算统一、failed优先填充/mix补齐），test_convert.py 新增 5 项，总数 242 → **247**。
+> 更新 2026-08-03（四）：gpt 轮改 Qwen3 式 <think>/<answer> 双标签（全来源答案统一 <answer> 包裹，mix sanitize 剥旧标签后统一重包），test_convert.py 新增 1 项（+既有断言改写），总数 247 → **248**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **247 passed**，2 deselected | 44.5s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **248 passed**，2 deselected | 44.6s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -35,7 +36,7 @@
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
-| test_convert.py | 23 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底 |
+| test_convert.py | 24 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
 | **合计** | **249** | |
 
@@ -129,7 +130,8 @@
   success、run_success 计数如实含首轮翻转（2）
 - **convert thinking 模式**：reasoning_content 优先（cot_response 文本
   不出现）；回退路径剥离 JSON span + 围栏后恰为推理原文；cot 只有 JSON
-  时 gpt 轮无 <thinking> 包裹
+  时 gpt 轮仅 <answer> 无 <think> 段；--think-tag/--answer-tag 自定义
+  标签名生效
 - **human/images**：messages 与 conversations 两种 original_sample 产出
   相同 human 轮；<image> 占位符存在不重复、缺失自动前置；images 透传
 - **容器**：默认 json 数组 json.load 可读；jsonl 逐行 json.loads 可解析、

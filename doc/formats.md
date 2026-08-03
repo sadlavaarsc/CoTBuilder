@@ -143,7 +143,7 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
   {
     "conversations": [
       {"from": "human", "value": "<image>\n请提取图片中的关键信息\n/think"},
-      {"from": "gpt",   "value": "<thinking>先看发票号码，再看总价。</thinking>\n{\n  \"发票号码\": \"J123\",\n  \"总价\": \"¥5.83\"\n}"}
+      {"from": "gpt",   "value": "<think>先看发票号码，再看总价。</think>\n<answer>{\n  \"发票号码\": \"J123\",\n  \"总价\": \"¥5.83\"\n}</answer>"}
     ],
     "images": ["/abs/path/invoice_0.jpg"]
   }
@@ -152,12 +152,16 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 
 - 容器：**默认 JSON 数组**（`--format json`，对齐 13 万条老数据微调输入）；
   `--format jsonl` = 每行一个样本；
+- **gpt 轮 = Qwen3 式双标签**（2026-08-03 用户拍板）：答案统一
+  `<answer>{JSON}</answer>` 包裹（三种来源同口径，vLLM 等下游一条规则
+  即可切出 answer 段），有推理链时前置 `<think>推理链</think>`；
+  标签名 `--think-tag` / `--answer-tag` 可覆盖；
 - gpt 轮三种 `--gpt-mode`：
   | mode | gpt value |
   |---|---|
-  | `thinking`（默认） | `<thinking>推理链</thinking>` + 纯 JSON；推理链取 `reasoning_content` → 回退 `cot_response` 剥离 JSON；为空则不加包裹 |
-  | `raw` | `cot_response` 原文不动（`--strip-fences` 可删 ```json 围栏标记、保留内容） |
-  | `json` | 纯 `predicted_json`（indent=2） |
+  | `thinking`（默认） | `<think>推理链</think>` + `<answer>{JSON}</answer>`；推理链取 `reasoning_content` → 回退 `cot_response` 剥离 JSON；为空则仅 `<answer>` |
+  | `raw` | `cot_response` 原文不动（**不参与双标签提取契约**；`--strip-fences` 可删 ```json 围栏） |
+  | `json` | 纯 `<answer>{JSON}</answer>`（无推理） |
 - **thinking 软开关标志**（2026-08-03 追加）：human 轮末尾按 gpt 轮**实际
   是否含推理**自动加 `/think`（thinking 模式有推理链、raw 模式）或
   `/no_think`（json 模式、推理链为空）；`--think-flag` / `--no-think-flag`
@@ -173,7 +177,8 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
   失败跳过）。**failed 的 cot_response/predicted_json 永不作训练目标**
   （错误产物，拼「错误推理+正确答案」是负样本）；
 - **外部无 CoT 混入**（`--mix <shareGPT文件>`）：.json/.jsonl 均可，每条
-  混入样本自动剥 `<thinking>` 段 + human 末尾加 `/no_think`；
+  混入样本自动剥 `<think>`/`<thinking>` 推理段与已有 `<answer>` 包装、
+  统一重包 `<answer>`（不双包）+ human 末尾加 `/no_think`；
 - human 轮 = original_sample 的 prompt；`<image>` 缺失时自动前置（images 非空）；
   `images` 原样透传（本地路径列表，训练框架自行加载）；
 - 缺必需素材（predicted_json / cot_response）的记录跳过，计入

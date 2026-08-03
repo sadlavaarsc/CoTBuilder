@@ -381,9 +381,12 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
 
 设计决策：
 
-- **gpt 轮三形态**（默认 thinking，用户拍板）：`<thinking>推理链</thinking>`
-  + 纯 JSON / cot_response 原文 / 纯 predicted_json；推理链回收优先级与
-  「空则不加包裹」规则见 §5.21；
+- **gpt 轮 = Qwen3 式双标签（2026-08-03 用户拍板）**：答案统一
+  `<answer>{JSON}</answer>` 包裹（三种来源同口径，vLLM 等下游一条规则
+  切出 answer 段），有推理链前置 `<think>`；三种 --gpt-mode：
+  thinking（默认，推理链回收优先级与「空则不加 <think> 段」见 §5.21）
+  / raw（cot_response 原文，**不参与双标签契约**）/ json（纯 <answer>）；
+  标签名 --think-tag/--answer-tag 可覆盖；
 - **容器默认 JSON 数组**（对齐用户 13 万条老数据微调输入），JSONL 可选；
 - **默认只读 success_samples.json**（训练数据语义；judge 改判成功的记录
   经 merge 后就在 success 里，天然包含）；调试用 --input 指定文件；

@@ -3,19 +3,24 @@
 把 run / merged / judge 输出目录中的记录转换为下游训练框架（LLaMA-
 Factory 等）可直接读取的 ShareGPT 格式：
 
-    {"conversations": [{"from": "human", "value": "<image>\n<prompt>"},
-                       {"from": "gpt",   "value": "<thinking>推理链</thinking>\n{答案JSON}"}],
+    {"conversations": [{"from": "human", "value": "<image>\n<prompt>\n/think"},
+                       {"from": "gpt",   "value": "<think>推理链</think>\n<answer>{答案JSON}</answer>"}],
      "images": ["<原始图片路径>"]}
 
-gpt 轮三种形态（--gpt-mode，默认 thinking，2026-08-03 用户拍板）：
-- thinking：<thinking>推理链</thinking> + 纯 JSON 答案。推理链回收
-  优先级（design.md §6e 防误解）：① full_api_response 的
-  choices[0].message.reasoning_content（服务端若返回思考通道）；
+gpt 轮形态（Qwen3 式双标签，2026-08-03 用户拍板）：答案统一
+`<answer>{JSON}</answer>` 包裹，thinking 模式有推理链时前置
+`<think>推理链</think>`——vLLM 等下游一条规则即可切出 thinking 段 /
+answer 段；标签名 --think-tag/--answer-tag 可覆盖。
+
+gpt 轮三种 --gpt-mode（默认 thinking）：
+- thinking：`<think>推理链</think>\n<answer>{JSON}</answer>`；推理链
+  为空则仅 `<answer>`。推理链回收优先级（design.md §5.21）：
+  ① full_api_response 的 choices[0].message.reasoning_content；
   ② cot_response 剥离 JSON span 后的文本（extractor.find_json_span，
-  连同代码围栏 strip）；仍为空则**不加包裹**（不要拼接 predicted_json
-  凑标签）；
-- raw：cot_response 原文不动（思考与 JSON 混在一起，最忠实）；
-- json：纯 predicted_json 序列化答案（无推理）。
+  连同代码围栏 strip）；仍为空则**不加 <think> 段**（不拼假推理链）；
+- raw：cot_response 原文不动（忠实模式，**不参与 think/answer 提取
+  契约**；--strip-fences 可删 ```json 围栏）；
+- json：纯 `<answer>{JSON}</answer>`（无推理）。
 
 容器格式（--format，默认 json）：json = JSON 数组单文件（对齐 13 万条
 老数据的微调输入）；jsonl = 每行一个样本（大文件流式友好）。
@@ -64,7 +69,10 @@ GPT_MODES = ("thinking", "raw", "json")
 CONTAINER_FORMATS = ("json", "jsonl")
 
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\s*")
-_THINK_BLOCK_RE = re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL)
+
+# mix sanitize 剥除的旧版推理段（<think> 与历史格式的 <thinking> 都剥）
+_THINK_BLOCK_RE = re.compile(
+    r"<think(?:ing)?>.*?</think(?:ing)?>\s*", re.DOTALL)
 
 # thinking 软开关标志（2026-08-03 用户拍板：Qwen3 风格 /think /no_think）。
 # 加到 human 轮末尾——训练后模型按 prompt 中的标志决定是否输出推理段；
@@ -72,6 +80,16 @@ _THINK_BLOCK_RE = re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL)
 # 标志必须如实反映内容，不为凑格式给无推理样本挂 /think）。
 DEFAULT_THINK_FLAG = "/think"
 DEFAULT_NO_THINK_FLAG = "/no_think"
+
+# gpt 轮双标签（2026-08-03 用户拍板：Qwen3 式 <think>/<answer>）。
+# 全来源答案统一 <answer> 包裹——vLLM 等下游一条规则即可切出
+# thinking 段 / answer 段；raw 模式例外（忠实原文，不参与提取契约）。
+DEFAULT_THINK_TAG = "think"
+DEFAULT_ANSWER_TAG = "answer"
+
+
+def _wrap_tag(tag: str, content: str) -> str:
+    return f"<{tag}>{content}</{tag}>"
 
 
 def _apply_think_flag(text: str, flag: str,
@@ -144,11 +162,14 @@ def _reasoning_text(record: Dict[str, Any]) -> str:
 def to_sharegpt(record: Dict[str, Any], mode: str = "thinking",
                 strip_fences: bool = False,
                 think_flag: str = DEFAULT_THINK_FLAG,
-                no_think_flag: str = DEFAULT_NO_THINK_FLAG
+                no_think_flag: str = DEFAULT_NO_THINK_FLAG,
+                think_tag: str = DEFAULT_THINK_TAG,
+                answer_tag: str = DEFAULT_ANSWER_TAG
                 ) -> Optional[Dict[str, Any]]:
     """把一条 run 输出记录转成 ShareGPT 样本；必需素材缺失返回 None。
 
     thinking/json 模式必需 predicted_json；raw 模式必需 cot_response。
+    答案统一 <answer> 包裹；thinking 模式有推理链时前置 <think> 段。
     images 非空且 human 文本不含 <image> 占位符时前置（ShareGPT 约定）。
     strip_fences=True 时删掉 raw 模式 cot_response 中的 ```json 围栏标记
     （teacher 模型爱自带围栏，design.md §6e）。human 轮末尾按 gpt 轮
@@ -166,12 +187,13 @@ def to_sharegpt(record: Dict[str, Any], mode: str = "thinking",
         predicted = record.get("predicted_json")
         if predicted is None:
             return None
-        answer_json = json.dumps(predicted, ensure_ascii=False, indent=2)
+        answer_json = _wrap_tag(
+            answer_tag, json.dumps(predicted, ensure_ascii=False, indent=2))
         if mode == "json":
             answer = answer_json
         else:
             cot = _reasoning_text(record)
-            answer = (f"<thinking>{cot}</thinking>\n{answer_json}"
+            answer = (f"{_wrap_tag(think_tag, cot)}\n{answer_json}"
                       if cot else answer_json)
             has_thinking = bool(cot)
 
@@ -196,18 +218,26 @@ def to_sharegpt(record: Dict[str, Any], mode: str = "thinking",
 
 def sanitize_no_cot(sample: Dict[str, Any],
                     no_think_flag: str = DEFAULT_NO_THINK_FLAG,
-                    think_flag: str = DEFAULT_THINK_FLAG) -> Dict[str, Any]:
+                    think_flag: str = DEFAULT_THINK_FLAG,
+                    answer_tag: str = DEFAULT_ANSWER_TAG) -> Dict[str, Any]:
     """把一条外部无 CoT ShareGPT 样本调整为混合口径（就地修改并返回）。
 
-    - gpt 轮剥掉任何 <thinking>...</thinking> 段（无 CoT 数据不应含推理段）；
+    - gpt 轮剥掉任何 <think>/<thinking> 推理段与已有 <answer> 包装，
+      统一重包 <answer>（无 CoT 数据不应含推理段；答案包裹与管线
+      派生样本同口径，下游提取规则统一）；
     - human 轮末尾加 no_think_flag（已有的任何 think 标志行先剥掉）。
     """
+    prefix, suffix = f"<{answer_tag}>", f"</{answer_tag}>"
     for turn in sample.get("conversations", []):
         value = turn.get("value")
         if not isinstance(value, str):
             continue
         if turn.get("from") == "gpt":
-            turn["value"] = _THINK_BLOCK_RE.sub("", value)
+            value = _THINK_BLOCK_RE.sub("", value).strip()
+            if value.startswith(prefix) and value.endswith(suffix):
+                value = value[len(prefix):-len(suffix)].strip()
+            if value:
+                turn["value"] = _wrap_tag(answer_tag, value)
         elif turn.get("from") == "human":
             turn["value"] = _apply_think_flag(
                 value, no_think_flag,
@@ -237,12 +267,14 @@ def _failed_eligible(record: Dict[str, Any], source: str) -> bool:
 
 def failed_to_sharegpt(record: Dict[str, Any],
                        think_flag: str = DEFAULT_THINK_FLAG,
-                       no_think_flag: str = DEFAULT_NO_THINK_FLAG
+                       no_think_flag: str = DEFAULT_NO_THINK_FLAG,
+                       answer_tag: str = DEFAULT_ANSWER_TAG
                        ) -> Optional[Dict[str, Any]]:
     """把一条 failed 记录转成 /no_think + GT 答案的硬样本；无 GT dict 跳过。
 
-    gpt 轮 = ground_truth 序列化（与成功样本的答案格式一致）；**绝不使用**
-    该记录的 cot_response / predicted_json（错误产物，见模块 docstring）。
+    gpt 轮 = <answer>ground_truth 序列化</answer>（与成功样本的答案格式
+    一致）；**绝不使用**该记录的 cot_response / predicted_json（错误产物，
+    见模块 docstring）。
     """
     gt = record.get("ground_truth")
     if not isinstance(gt, dict):
@@ -259,8 +291,8 @@ def failed_to_sharegpt(record: Dict[str, Any],
     return {
         "conversations": [
             {"from": "human", "value": human},
-            {"from": "gpt",
-             "value": json.dumps(gt, ensure_ascii=False, indent=2)},
+            {"from": "gpt", "value": _wrap_tag(
+                answer_tag, json.dumps(gt, ensure_ascii=False, indent=2))},
         ],
         "images": images,
     }
@@ -291,7 +323,9 @@ def run_convert(input_path: str, output_path: str,
                 mix_path: Optional[str] = None, mix_ratio: float = 1.0,
                 think_flag: str = DEFAULT_THINK_FLAG,
                 no_think_flag: str = DEFAULT_NO_THINK_FLAG,
-                include_failed: Optional[str] = None) -> Dict[str, Any]:
+                include_failed: Optional[str] = None,
+                think_tag: str = DEFAULT_THINK_TAG,
+                answer_tag: str = DEFAULT_ANSWER_TAG) -> Dict[str, Any]:
     """执行转换并落盘，返回 convert_summary 字典。
 
     无 CoT 预算（include_failed 或 mix_path 给定时启用）：总条数 =
@@ -305,7 +339,8 @@ def run_convert(input_path: str, output_path: str,
     skipped = 0
     for rec in records:
         sample = to_sharegpt(rec, mode, strip_fences=strip_fences,
-                             think_flag=think_flag, no_think_flag=no_think_flag)
+                             think_flag=think_flag, no_think_flag=no_think_flag,
+                             think_tag=think_tag, answer_tag=answer_tag)
         if sample is None:
             logger.warning("记录 %s 缺必需素材，跳过",
                            rec.get("sample_id", "?"))
@@ -331,7 +366,8 @@ def run_convert(input_path: str, output_path: str,
                            failed_path)
         eligible = [s for r in failed_records
                     if _failed_eligible(r, include_failed)
-                    for s in [failed_to_sharegpt(r, think_flag, no_think_flag)]
+                    for s in [failed_to_sharegpt(r, think_flag, no_think_flag,
+                                                 answer_tag)]
                     if s is not None]
         take = min(budget, len(eligible))
         chosen = rng.sample(eligible, take) if take < len(eligible) \
@@ -350,7 +386,8 @@ def run_convert(input_path: str, output_path: str,
                            remaining, len(pool))
         chosen = rng.sample(pool, take) if take < len(pool) else list(pool)
         for sample in chosen:
-            samples.append(sanitize_no_cot(sample, no_think_flag, think_flag))
+            samples.append(sanitize_no_cot(sample, no_think_flag, think_flag,
+                                           answer_tag))
             mixed_in += 1
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -373,6 +410,8 @@ def run_convert(input_path: str, output_path: str,
         "strip_fences": strip_fences,
         "think_flag": think_flag,
         "no_think_flag": no_think_flag,
+        "think_tag": think_tag,
+        "answer_tag": answer_tag,
         "total_records": len(records),
         "converted": cot_count,
         "skipped": skipped,
@@ -428,6 +467,10 @@ def main() -> None:
                         help="failed 样本派生入训（/no_think + GT 答案硬样本）："
                              "upheld（默认，judge 维持原判）/ mismatch"
                              "（有规则 diff 证据）/ all（任何带 GT 的记录）")
+    parser.add_argument("--think-tag", default=DEFAULT_THINK_TAG,
+                        help="gpt 轮推理段标签名（默认 think → <think>）")
+    parser.add_argument("--answer-tag", default=DEFAULT_ANSWER_TAG,
+                        help="gpt 轮答案段标签名（默认 answer → <answer>）")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -441,7 +484,9 @@ def main() -> None:
                           mix_path=args.mix, mix_ratio=args.mix_ratio,
                           think_flag=args.think_flag,
                           no_think_flag=args.no_think_flag,
-                          include_failed=args.include_failed)
+                          include_failed=args.include_failed,
+                          think_tag=args.think_tag,
+                          answer_tag=args.answer_tag)
 
     print("\n" + "=" * 50)
     print("CoT Convert Summary")
