@@ -8,12 +8,13 @@
 > 更新 2026-07-29（三）：GATEWAY_ERROR 分类（封顶重试）+ request_timeout 收紧 400s + summary quality 块，新增 6 项，总数 197 → **203**。
 > 更新 2026-07-30：model judge 后处理工具（judge.py）+ mock judge_mode，新增 tests/test_judge.py（14 项），总数 203 → **217**。
 > 更新 2026-08-03：merge/convert 离线工具 + extractor.find_json_span（extract_json 委托重构），新增 tests/test_merge.py（7 项）+ tests/test_convert.py（11 项），总数 217 → **235**。
+> 更新 2026-08-03（二）：convert 追加 strip-fences / think 软开关标志 / 无CoT按比例混入，test_convert.py 新增 7 项，总数 235 → **242**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **235 passed**，2 deselected | 44.6s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **242 passed**，2 deselected | 44.6s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -33,9 +34,9 @@
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
-| test_convert.py | 11 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账 |
+| test_convert.py | 18 | ShareGPT 转换：reasoning_content 优先/cot 剥离回退/空 cot 不加包裹/raw 原文/json 纯答案、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性 |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **237** | |
+| **合计** | **244** | |
 
 ## 核心指标实测值
 
@@ -135,6 +136,14 @@
   计数正确
 - **extractor 重构无回归**：extract_json 委托 find_json_span 后原 12 项
   测试全部通过（行为不变）
+- **strip-fences**：raw 模式默认保留 ```json 围栏；开启后围栏标记删净、
+  JSON 内容与推理文本完整保留
+- **think 标志**：thinking 有推理/raw → human 末尾 /think；json 模式、
+  推理链为空 → /no_think；自定义文案与空串禁用生效；human 已有旧标志
+  行时剥掉重加不重复
+- **无 CoT 混入**：ratio=1.0 混入等量（3→3）、ratio=0.5 向下取整（1）、
+  超体量全取并计数如实；混入样本残留 <thinking> 段剥净、human 末尾
+  /no_think；jsonl 源可读；固定种子两次运行选中样本完全一致
 
 ### model judge 后处理工具（2026-07-30 新增）
 

@@ -389,6 +389,15 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
   经 merge 后就在 success 里，天然包含）；调试用 --input 指定文件；
 - human 轮 = original_sample 的 prompt（messages/conversations 两格式
   与 generator 同取值源）；`<image>` 占位符缺失时前置；images 路径透传；
+- **thinking 软开关标志（2026-08-03 用户追加）**：human 末尾按 gpt 轮
+  实际是否含推理加 `/think` / `/no_think`（可自定义、空串禁用）——
+  标志必须如实反映内容，无推理样本（json 模式、推理链为空）挂
+  `/no_think`，与 §5.21「不拼假推理链」同一原则；
+- **--strip-fences**：raw 模式删 ```json 围栏标记保留内容（teacher
+  模型爱自带围栏）；
+- **--mix 无 CoT 混入**：按比例（ratio × CoT 条数）从外部 ShareGPT
+  混入，固定种子抽样可复现；混入样本自动剥 <thinking> 段 + 加
+  `/no_think`——无 CoT 数据与 CoT 数据的标志口径因此一致；
 - extractor 新增 find_json_span（纯加法，extract_json 改为委托它，
   行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
   共用同一份平衡括号扫描。

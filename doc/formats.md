@@ -142,7 +142,7 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 [
   {
     "conversations": [
-      {"from": "human", "value": "<image>\n请提取图片中的关键信息"},
+      {"from": "human", "value": "<image>\n请提取图片中的关键信息\n/think"},
       {"from": "gpt",   "value": "<thinking>先看发票号码，再看总价。</thinking>\n{\n  \"发票号码\": \"J123\",\n  \"总价\": \"¥5.83\"\n}"}
     ],
     "images": ["/abs/path/invoice_0.jpg"]
@@ -156,8 +156,16 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
   | mode | gpt value |
   |---|---|
   | `thinking`（默认） | `<thinking>推理链</thinking>` + 纯 JSON；推理链取 `reasoning_content` → 回退 `cot_response` 剥离 JSON；为空则不加包裹 |
-  | `raw` | `cot_response` 原文不动 |
+  | `raw` | `cot_response` 原文不动（`--strip-fences` 可删 ```json 围栏标记、保留内容） |
   | `json` | 纯 `predicted_json`（indent=2） |
+- **thinking 软开关标志**（2026-08-03 追加）：human 轮末尾按 gpt 轮**实际
+  是否含推理**自动加 `/think`（thinking 模式有推理链、raw 模式）或
+  `/no_think`（json 模式、推理链为空）；`--think-flag` / `--no-think-flag`
+  自定义文案，空串禁用；已有旧标志行会被剥掉后重加（不重复不矛盾）；
+- **无 CoT 混入**（2026-08-03 追加）：`--mix <shareGPT文件> --mix-ratio R`
+  → 从外部 ShareGPT 数据（.json/.jsonl）混入 `int(R × CoT 条数)` 条
+  （固定种子 42 抽样可复现，超体量全取），追加在 CoT 样本之后；每条
+  混入样本自动剥 `<thinking>` 段 + human 末尾加 `/no_think`；
 - human 轮 = original_sample 的 prompt；`<image>` 缺失时自动前置（images 非空）；
   `images` 原样透传（本地路径列表，训练框架自行加载）；
 - 缺必需素材（predicted_json / cot_response）的记录跳过，计入

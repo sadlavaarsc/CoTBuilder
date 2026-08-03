@@ -132,3 +132,109 @@ class TestRunConvertFiles:
             sample = json.loads(line)
             assert [t["from"] for t in sample["conversations"]] == ["human", "gpt"]
             assert sample["images"]
+
+
+class TestStripFences:
+    def test_raw_mode_strip_fences(self):
+        """--strip-fences：raw 模式删 ```json 围栏标记、保留 JSON 内容。"""
+        rec = make_record()
+        fenced = to_sharegpt(rec, mode="raw")["conversations"][1]["value"]
+        assert "```" in fenced                      # 默认保留原文围栏
+        stripped = to_sharegpt(rec, mode="raw",
+                               strip_fences=True)["conversations"][1]["value"]
+        assert "```" not in stripped
+        assert GT_INLINE in stripped and COT_TEXT in stripped
+
+
+class TestThinkFlags:
+    def test_flag_follows_actual_thinking_content(self):
+        """标志按 gpt 轮实际是否含推理逐样本选择，加在 human 末尾。"""
+        cot_human = to_sharegpt(make_record())["conversations"][0]["value"]
+        assert cot_human.endswith("\n/think")       # thinking 模式有推理链
+        raw_human = to_sharegpt(make_record(), mode="raw"
+                                )["conversations"][0]["value"]
+        assert raw_human.endswith("\n/think")       # raw 保留推理原文
+        json_human = to_sharegpt(make_record(), mode="json"
+                                 )["conversations"][0]["value"]
+        assert json_human.endswith("\n/no_think")   # json 纯答案无推理
+        empty_cot = make_record(cot=GT_INLINE)      # 推理链为空 → 无包裹
+        empty_human = to_sharegpt(empty_cot)["conversations"][0]["value"]
+        assert empty_human.endswith("\n/no_think")  # 无推理内容不挂 /think
+
+    def test_custom_flags_and_disable(self):
+        """自定义文案；空串禁用标志。"""
+        sample = to_sharegpt(make_record(), think_flag="<THINK>",
+                             no_think_flag="<NO_THINK>")
+        assert sample["conversations"][0]["value"].endswith("\n<THINK>")
+        disabled = to_sharegpt(make_record(), think_flag="",
+                               no_think_flag="")
+        assert "/think" not in disabled["conversations"][0]["value"]
+
+    def test_existing_flag_lines_replaced(self):
+        """human 已有旧标志行：剥掉后加正确标志，不重复不矛盾。"""
+        rec = make_record()
+        rec["original_sample"]["messages"][0]["content"] += "\n/no_think"
+        human = to_sharegpt(rec)["conversations"][0]["value"]
+        assert human.count("/think") == 1 and "/no_think" not in human
+
+
+def no_cot_sample(sid, with_thinking_block=False):
+    gpt = "答案是 42"
+    if with_thinking_block:
+        gpt = "<thinking>残留推理</thinking>\n答案是 42"
+    return {"conversations": [{"from": "human", "value": f"问题 {sid}"},
+                              {"from": "gpt", "value": gpt}],
+            "images": []}
+
+
+class TestMix:
+    def _setup(self, tmp_path, n_cot=3, n_mix=5):
+        d = tmp_path / "merged"
+        d.mkdir()
+        (d / "success_samples.json").write_text(json.dumps(
+            [make_record(f"c{i}") for i in range(n_cot)], ensure_ascii=False))
+        mix = tmp_path / "nocot.json"
+        mix.write_text(json.dumps(
+            [no_cot_sample(f"m{i}", with_thinking_block=(i == 0))
+             for i in range(n_mix)], ensure_ascii=False))
+        return str(d), str(mix)
+
+    def test_mix_ratio_and_sanitize(self, tmp_path):
+        """ratio=1.0 → 混入 CoT 条数等量；混入样本去 thinking 段 + /no_think。"""
+        input_dir, mix_path = self._setup(tmp_path)
+        out = str(tmp_path / "train.json")
+        summary = run_convert(input_dir, out, mix_path=mix_path, mix_ratio=1.0)
+
+        assert summary["converted"] == 3 and summary["mixed_in"] == 3
+        assert summary["total_samples"] == 6
+        data = json.loads((tmp_path / "train.json").read_text())
+        mixed = data[3:]
+        for s in mixed:
+            human, gpt = s["conversations"]
+            assert human["value"].endswith("\n/no_think")
+            assert "<thinking>" not in gpt["value"]  # 残留 thinking 段已剥
+
+    def test_mix_ratio_partial_and_overflow(self, tmp_path):
+        """ratio=0.5 → int(0.5×3)=1 条；需求超体量 → 全取并计数如实。"""
+        input_dir, mix_path = self._setup(tmp_path, n_cot=3, n_mix=2)
+        out = str(tmp_path / "t1.json")
+        summary = run_convert(input_dir, out, mix_path=mix_path, mix_ratio=0.5)
+        assert summary["mixed_in"] == 1
+
+        out2 = str(tmp_path / "t2.json")
+        summary2 = run_convert(input_dir, out2, mix_path=mix_path,
+                               mix_ratio=10.0)   # 需 30 条，只有 2 条
+        assert summary2["mixed_in"] == 2
+
+    def test_mix_jsonl_source_and_deterministic(self, tmp_path):
+        """混入源支持 .jsonl；固定种子 → 两次运行选中的样本一致。"""
+        input_dir, _ = self._setup(tmp_path)
+        mixl = tmp_path / "nocot.jsonl"
+        mixl.write_text("".join(
+            json.dumps(no_cot_sample(f"m{i}"), ensure_ascii=False) + "\n"
+            for i in range(5)))
+        out1, out2 = str(tmp_path / "a.json"), str(tmp_path / "b.json")
+        run_convert(input_dir, out1, mix_path=str(mixl), mix_ratio=0.67)
+        run_convert(input_dir, out2, mix_path=str(mixl), mix_ratio=0.67)
+        assert json.loads((tmp_path / "a.json").read_text()) == \
+               json.loads((tmp_path / "b.json").read_text())
