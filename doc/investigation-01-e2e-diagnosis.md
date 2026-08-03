@@ -421,3 +421,18 @@ scored/unscored 计数，看平均 KV 质量而不只是完美样本）。
    有效 QPM 压到 ~10–15。降 qpm 到 40 后并发需求同比例降至 ~20；
 3. 本片段 rtt 长尾（44/49/70s）为 v2.4 之前数据，v2.4 复测后重校；
    新 request_timeout=120 对本片段无影响（最大 rtt 70.4s）。
+
+### 2026-08-03（七）｜【待核实·暂不处理】下游汇报：`_exhausted_result` 的 best 分支漏传 ground_truth
+
+- **汇报内容**：下游发现 `generator._exhausted_result` 在
+  `best is not None` 分支构造 MISMATCH 失败结果时**漏传
+  `ground_truth` 参数**（generator.py:207-214；对比纯网络失败分支
+  219 行有传），导致此类 failed 样本的 `ground_truth` 字段缺失；
+- **影响面**：`convert --include-failed` 的 hard example 流程
+  （`failed_to_sharegpt` 要求 GT dict，缺失则返回 None 跳过）被卡住——
+  MISMATCH 耗尽恰好是 upheld/mismatch 档硬样本的主力来源；
+- **当前状态**：**按用户指示仅记录汇报，未验证、未修复**。
+  若属实，修复应为一行改动（best 分支补传 ground_truth），
+  修复时需同步补 mock 测试断言「MISMATCH 耗尽记录含 ground_truth」；
+- **关联**：formats.md §2「条件字段按路径」表格在核实后需同步修订
+  （当前口径为「成功/MISMATCH 耗尽字段全」）。
