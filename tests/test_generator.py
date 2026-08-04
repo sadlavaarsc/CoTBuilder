@@ -212,6 +212,16 @@ class TestResultCompat:
         assert r["status"] == "failed"
         assert "error" in r and "error_type" in r
 
+    async def test_mismatch_exhausted_result_has_ground_truth(self):
+        """MISMATCH 耗尽（best 分支收尾）记录必须带 ground_truth——
+        2026-08-04 修复前 best 分支漏传，卡住 convert 硬样本流程。"""
+        bad = {"a": "9", "b": "9", "c": "9"}
+        p = make_processor([ok(bad)] * 3, max_sample_attempts=3)
+        r = await p.process(make_sample(), "s1")
+        assert r["status"] == "failed"
+        assert r["error_type"] == "MISMATCH"
+        assert r["ground_truth"] == GT
+
     async def test_invalid_gt(self):
         p = make_processor([])
         r = await p.process({"id": "s1", "messages": [

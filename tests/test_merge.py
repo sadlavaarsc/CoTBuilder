@@ -70,6 +70,22 @@ def read_json(path):
 
 
 class TestMergeRecords:
+    def test_duplicate_ids_counted_behavior_unchanged(self):
+        """重复 id 防御性检测（2026-08-04）：run_failed / judge 输出带
+        重复 sample_id 时计数暴露，join 行为不变（judge 侧后赢）。"""
+        s, f, counts = merge_records(
+            [], [run_failed_rec("d1"), run_failed_rec("d1"),
+                 run_failed_rec("ok1")],
+            [judged_rec("d1", overturned=False),
+             judged_rec("d1", overturned=True)],   # 后者赢
+            [])
+
+        assert counts["duplicate_run_failed_ids"] == 1
+        assert counts["duplicate_judged_ids"] == 1
+        # join 行为不变：judge 后赢（overturned），两条 d1 都被它覆盖
+        assert counts["judged_overturned"] == 2
+        assert counts["untouched_failed"] == 1     # ok1 未被覆盖
+
     def test_overturn_moves_to_success_with_tag(self):
         """改判成功：进 merged success，judge_result 标签在、原字段不动。"""
         s, f, counts = merge_records(

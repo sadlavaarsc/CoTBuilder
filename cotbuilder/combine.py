@@ -13,9 +13,14 @@
 只拼接、按 sample_id 去重、按 status 路由，不解读记录内容。输出目录
 可直接作为 convert --input、judge --input 或下一轮 combine 的输入。
 
-去重语义：同一 sample_id 多次出现时**内容以最后出现的输入为准**
-（后面的路径视为更新），顺序按首次出现位置。无 sample_id 的记录
-无法去重，全部保留并计数。
+去重语义（2026-08-04 修订，按输入路径分键）：去重键 = **(输入路径,
+sample_id)**——**同一路径内**同一 sample_id 多次出现时内容以最后
+出现为准（更新语义：后出现的记录视为同一样本的更新版）；**跨路径**
+同 id 一律视为不同样本、全部保留（下游汇报案例：三个独立切分的
+part 都按位置补 sample_{i} 编号，id 整批撞车，按裸 sample_id 去重
+会把 3000 条静默吞成 1000 条——sample_id 只保证单 run 内唯一，
+跨路径不具区分度，design.md §5）。无 sample_id 的记录无法去重，
+全部保留并计数。
 
 入口：python -m cotbuilder.combine --inputs <路径1> [路径2 ...]
 --output <合并目录>
@@ -49,26 +54,41 @@ def load_path(path: str) -> List[Dict[str, Any]]:
     return records
 
 
-def combine_records(inputs: List[List[Dict[str, Any]]]
+def combine_records(tagged_inputs: List[Tuple[str, List[Dict[str, Any]]]]
                     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """拼接多路记录并按 sample_id 去重（后赢），返回 (记录列表, counts)。"""
-    by_id: Dict[str, Dict[str, Any]] = {}
+    """拼接多路记录并按 (路径, sample_id) 分键去重，返回 (记录列表, counts)。
+
+    tagged_inputs = [(tag, records), ...]，tag 为输入路径（abspath）。
+    路径内同 id 后赢；跨路径同 id 全保留并计 cross_path_id_collisions
+    （出现在 >1 个路径的 id 数）。顺序按首次出现位置。
+    """
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
     no_id: List[Dict[str, Any]] = []
+    id_paths: Dict[str, set] = {}
     total_in = deduped = 0
-    for records in inputs:
+    for tag, records in tagged_inputs:
         for rec in records:
             total_in += 1
             sid = rec.get("sample_id")
             if sid:
-                if sid in by_id:
+                id_paths.setdefault(sid, set()).add(tag)
+                key = (tag, sid)
+                if key in by_key:
                     deduped += 1
-                by_id[sid] = rec      # 后出现的输入覆盖（视为更新）
+                by_key[key] = rec     # 路径内后出现的记录覆盖（视为更新）
             else:
                 no_id.append(rec)
-    return list(by_id.values()) + no_id, {
+    cross_path = sum(1 for paths in id_paths.values() if len(paths) > 1)
+    if cross_path:
+        logger.warning(
+            "%d 个 sample_id 出现在多个输入路径（跨路径撞 id，已按路径分键"
+            "全部保留）；注意输出中存在重复 sample_id，下游 judge 的 "
+            "checkpoint 按 sample_id 判重会跳过后者", cross_path)
+    return list(by_key.values()) + no_id, {
         "total_in": total_in,
         "deduped": deduped,
         "no_sample_id": len(no_id),
+        "cross_path_id_collisions": cross_path,
     }
 
 
@@ -82,7 +102,8 @@ def _write_json_atomic(path: str, data: Any) -> None:
 
 def run_combine(paths: List[str], output_dir: str) -> Dict[str, Any]:
     """执行合并并落盘，返回 combine_summary 字典。"""
-    records, counts = combine_records([load_path(p) for p in paths])
+    records, counts = combine_records(
+        [(os.path.abspath(p), load_path(p)) for p in paths])
 
     success = [r for r in records if r.get("status") == "success"]
     failed = [r for r in records if r.get("status") != "success"]
@@ -135,7 +156,9 @@ def main() -> None:
     print("=" * 50)
     print(f"Inputs: {len(summary['inputs'])} paths")
     print(f"Total in: {summary['total_in']}")
-    print(f"Deduped (重复 sample_id): {summary['deduped']}")
+    print(f"Deduped (路径内重复 sample_id): {summary['deduped']}")
+    print(f"Cross-path id collisions (跨路径撞 id，全保留): "
+          f"{summary['cross_path_id_collisions']}")
     print(f"No sample_id (全部保留): {summary['no_sample_id']}")
     print(f"Final success / failed: {summary['final_success']} / "
           f"{summary['final_failed']}")

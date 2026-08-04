@@ -49,12 +49,27 @@ def merge_records(
       有无 failure 细分 upheld / judge_error）；
     - run failed 未被覆盖 → 原样留 merged failed（untouched_failed）；
     - judge 记录 id 在 run 两侧都不存在 → 跳过（orphaned）。
+
+    重复 id 防御性检测（2026-08-04）：单 run 内 sample_id 由构造保证
+    唯一（位置补 id），但显式 id 输入可能自带重复——重复时 join 行为
+    不变（后赢/逐条路由），仅 warning + 计数暴露（sample_id 跨批次
+    不具区分度，design.md §5）。
     """
     judged: Dict[str, Dict[str, Any]] = {}
+    duplicate_judged_ids = 0
     for rec in judge_success + judge_failed:
         sid = rec.get("sample_id")
         if sid:
+            if sid in judged:
+                duplicate_judged_ids += 1
+                logger.warning("judge 输出中 sample_id %s 重复，以后者为准", sid)
             judged[sid] = rec
+
+    run_failed_ids = [r.get("sample_id") for r in run_failed]
+    duplicate_run_failed_ids = len(run_failed_ids) - len(set(run_failed_ids))
+    if duplicate_run_failed_ids:
+        logger.warning("run failed 中存在 %d 个重复 sample_id，join 可能错配",
+                       duplicate_run_failed_ids)
 
     counts = {
         "run_success": len(run_success),
@@ -65,6 +80,8 @@ def merge_records(
         "untouched_failed": 0,
         "orphaned": 0,
         "collision": 0,
+        "duplicate_run_failed_ids": duplicate_run_failed_ids,
+        "duplicate_judged_ids": duplicate_judged_ids,
     }
     merged_success = list(run_success)
     merged_failed: List[Dict[str, Any]] = []

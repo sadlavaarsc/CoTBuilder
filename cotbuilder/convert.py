@@ -61,7 +61,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from .extractor import find_json_span
+from .extractor import extract_json, find_json_span
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,22 @@ def _failed_eligible(record: Dict[str, Any], source: str) -> bool:
     return True   # all
 
 
+def _gt_from_original_sample(original: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从 original_sample 回退提取 GT dict（两格式取值 + extract_json）。
+
+    复刻 generator._gt_text 的取值逻辑（不 import generator——本工具保持
+    离线自包含）。用途：修复前产出的 MISMATCH 耗尽记录缺 ground_truth
+    字段（generator best 分支漏传，2026-08-04 修复），但 original_sample
+    里永远带着 GT 文本，消费端可自愈，旧数据无需重跑。
+    """
+    if "messages" in original and len(original.get("messages", [])) > 1:
+        gt_text = original["messages"][1].get("content", "")
+    else:
+        convs = original.get("conversations", [{}, {}])
+        gt_text = convs[1].get("value", "") if len(convs) > 1 else ""
+    return extract_json(gt_text) if gt_text else None
+
+
 def failed_to_sharegpt(record: Dict[str, Any],
                        think_flag: str = DEFAULT_THINK_FLAG,
                        no_think_flag: str = DEFAULT_NO_THINK_FLAG,
@@ -274,9 +290,12 @@ def failed_to_sharegpt(record: Dict[str, Any],
 
     gpt 轮 = <answer>ground_truth 序列化</answer>（与成功样本的答案格式
     一致）；**绝不使用**该记录的 cot_response / predicted_json（错误产物，
-    见模块 docstring）。
+    见模块 docstring）。GT 优先取 record["ground_truth"]，缺失时回退
+    original_sample 提取（救修复前产出的旧记录）。
     """
     gt = record.get("ground_truth")
+    if not isinstance(gt, dict):
+        gt = _gt_from_original_sample(record.get("original_sample") or {})
     if not isinstance(gt, dict):
         return None
     original = record.get("original_sample") or {}
@@ -354,6 +373,7 @@ def run_convert(input_path: str, output_path: str,
 
     # 优先：failed 派生硬样本（/no_think + GT 答案）
     failed_used = 0
+    failed_gt_recovered = 0
     if include_failed and budget > 0:
         failed_path = (os.path.join(input_path, "failed_samples.json")
                        if os.path.isdir(input_path)
@@ -364,16 +384,21 @@ def run_convert(input_path: str, output_path: str,
         if not failed_records:
             logger.warning("failed 记录为空或文件不存在（%s），预算全部留给 mix",
                            failed_path)
-        eligible = [s for r in failed_records
-                    if _failed_eligible(r, include_failed)
-                    for s in [failed_to_sharegpt(r, think_flag, no_think_flag,
-                                                 answer_tag)]
-                    if s is not None]
+        eligible = []
+        for r in failed_records:
+            if not _failed_eligible(r, include_failed):
+                continue
+            s = failed_to_sharegpt(r, think_flag, no_think_flag, answer_tag)
+            if s is None:
+                continue
+            # GT 从 original_sample 回退救回的记录打标（观测旧数据受损面）
+            eligible.append((s, not isinstance(r.get("ground_truth"), dict)))
         take = min(budget, len(eligible))
         chosen = rng.sample(eligible, take) if take < len(eligible) \
             else eligible
-        samples.extend(chosen)
+        samples.extend(s for s, _ in chosen)
         failed_used = len(chosen)
+        failed_gt_recovered = sum(1 for _, recovered in chosen if recovered)
 
     # 补齐：外部无 CoT 数据
     mixed_in = 0
@@ -418,6 +443,7 @@ def run_convert(input_path: str, output_path: str,
         "no_cot_budget": budget,
         "include_failed": include_failed,
         "failed_used": failed_used,
+        "failed_gt_recovered": failed_gt_recovered,
         "mixed_in": mixed_in,
         "mix_source": os.path.abspath(mix_path) if mix_path else None,
         "total_samples": len(samples),
@@ -494,6 +520,9 @@ def main() -> None:
     print(f"Total records: {summary['total_records']}")
     print(f"Converted (CoT): {summary['converted']}")
     print(f"Failed-derived (无CoT硬样本): {summary['failed_used']}")
+    if summary["failed_gt_recovered"]:
+        print(f"  其中 GT 从 original_sample 回退救回: "
+              f"{summary['failed_gt_recovered']}")
     print(f"Mixed in (外部无CoT): {summary['mixed_in']}")
     print(f"Skipped (缺素材): {summary['skipped']}")
     print(f"Total samples: {summary['total_samples']}")

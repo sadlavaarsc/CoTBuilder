@@ -90,6 +90,11 @@ python -m cotbuilder.convert --input combined/ --output train.json \
     --include-failed upheld --mix-ratio 1.0 --mix <老数据.json>
 ```
 
+combine 按 **(输入路径, sample_id)** 分键去重（2026-08-04 起）——各批
+sample_id 撞车不再丢数据（跨路径同 id 全部保留，撞车数见
+combine_summary 的 `cross_path_id_collisions`）；仍建议上游切分时让
+id 全局唯一（如加批次前缀），下游 judge 按裸 id 判重，重复 id 会被跳过。
+
 ## 已知缺口（手动处理）
 
 - **infra 失败样本重跑**：`skipped_no_differences` 对应的样本（网络/限流/网关耗尽）

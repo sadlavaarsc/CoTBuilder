@@ -12,12 +12,13 @@
 > 更新 2026-08-03（三）：convert 追加 --include-failed（failed 派生 /no_think+GT 硬样本，无CoT预算统一、failed优先填充/mix补齐），test_convert.py 新增 5 项，总数 242 → **247**。
 > 更新 2026-08-03（四）：gpt 轮改 Qwen3 式 <think>/<answer> 双标签（全来源答案统一 <answer> 包裹，mix sanitize 剥旧标签后统一重包），test_convert.py 新增 1 项（+既有断言改写），总数 247 → **248**。
 > 更新 2026-08-03（五）：combine 多路径哑合并工具（combine.py），新增 tests/test_combine.py（5 项），总数 248 → **253**。
+> 更新 2026-08-04：两条下游汇报 bug 修复——generator MISMATCH 耗尽补传 ground_truth + convert original_sample GT 回退；combine 去重键改 (路径, sample_id)（跨路径同 id 全保留）；merge 重复 id 防御计数。test_generator +1 / test_convert +4 / test_combine +2（另有适配改写）/ test_merge +1，总数 253 → **261**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **253 passed**，2 deselected | 44.6s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **261 passed**，2 deselected | 44.5s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -29,18 +30,18 @@
 | test_metrics.py | 16 | 桶聚合/percentile/有效 QPM/jsonl 往返/record 不 await、超时拆分（超长尾掐断/放足超时成功/连接快速失败）、metrics 接线（jsonl 四段齐全、summary performance 块、有效 QPM 上界、reporter 行） |
 | test_extractor.py | 12 | 直解/代码块/平衡括号嵌套提取/字符串内括号转义/垃圾文本 |
 | test_ratelimit.py | 12 | paced 间隔、任意 60s 窗 ≤ qpm、并发等待者等差放行、窗口指标、退避上下界/cap/jitter 方差 |
-| test_generator.py | 18 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类（含 LENGTH_TRUNCATED 不重试、GATEWAY_ERROR 封顶重试与双约束）、结果字段兼容 |
+| test_generator.py | 19 | 寿命语义（纯 MISMATCH==3、纯网络==5、混合≤8、分账桶）、一遍过、最优收尾、错误分类（含 LENGTH_TRUNCATED 不重试、GATEWAY_ERROR 封顶重试与双约束）、结果字段兼容、MISMATCH 耗尽含 ground_truth |
 | test_writer.py | 8 | 逐次落盘文件恒合法、定期重写去重、checkpoint 恢复与自愈重建 |
 | test_client.py | 14 | 并发上限（服务端观测 max_in_flight）、限流饱和不占槽、1s 桶上界、错误分类（含 LENGTH_TRUNCATED / GATEWAY_ERROR 分流）、连接复用、usage 累计、生成参数到达服务端（默认=官方精确档） |
 | test_batch.py | 10 | 请求数守恒、时间包络、并发/串行精确等价、403 风暴恢复、断点恢复、success_rate 口径、输出兼容、summary token_usage/完整 config/quality 块、LENGTH_TRUNCATED 成桶不重试 |
 | test_degraded.py | 5 | 降级场景：10% 断连、5% 概率 403、大延迟抖动、混合小故障、100% 断连干净失败 |
 | test_mock_server.py | 9 | mock 自检：场景、观测端点、固定窗口 403、seed 确定性、length_truncated 响应形态、慢=EMPTY 绑定、finish_reason/usage 字段、504 档 |
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
-| test_merge.py | 7 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环 |
-| test_combine.py | 5 | 多路径哑合并：去重后赢/无 id 全保留、目录+文件混合输入路由与对账、缺文件容错、输出可直接喂 convert |
-| test_convert.py | 24 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底 |
+| test_merge.py | 8 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环、重复 id 防御计数 |
+| test_combine.py | 7 | 多路径哑合并（(路径, id) 分键）：路径内后赢/跨路径同 id 全保留/三 part 撞车案例复现/无 id 全保留、目录+文件混合输入路由与对账、缺文件容错、输出可直接喂 convert |
+| test_convert.py | 28 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底、GT 回退提取（messages/conversations 两格式/无 GT 仍跳过/救回计数） |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **255** | |
+| **合计** | **263** | |
 
 ## 核心指标实测值
 
@@ -200,7 +201,7 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-.venv/bin/python -m pytest tests/ -v            # 235 项指标测试（~45s）
+.venv/bin/python -m pytest tests/ -v            # 261 项指标测试（~45s）
 .venv/bin/python -m pytest tests/ -v -m slow    # 2 项近真实尺度冒烟（~26s）
 ```
 

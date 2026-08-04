@@ -25,7 +25,8 @@ merge/combine/convert 纯离线只读源目录。
 
 **combine（多路径哑合并）**：`python -m cotbuilder.combine --inputs
 <路径...> --output <目录>`——把任意多个 run/judge 目录或单文件按
-sample_id 去重（后路径覆盖前路径）拼接成标准两文件目录 +
+**(输入路径, sample_id)** 分键去重（路径内后赢；跨路径同 id 全部
+保留——sample_id 仅保证单 run 内唯一）拼接成标准两文件目录 +
 combine_summary.json；不解读记录内容，输出可直接喂 convert/judge。
 与 merge 的分工见 design.md §6f。
 
@@ -79,7 +80,9 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 | `error` / `error_type` | 条件 | 失败信息；error_type ∈ MISMATCH / NETWORK_ERROR / RATE_LIMITED / GATEWAY_ERROR / API_ERROR / EMPTY_RESPONSE / LENGTH_TRUNCATED / JSON_PARSE_ERROR |
 
 **条件字段按路径**（消费时必须先判存在）：
-- 成功 / MISMATCH 耗尽：字段全（含 cot_response、predicted_json、comparison_result）；
+- 成功 / MISMATCH 耗尽：字段全（含 cot_response、predicted_json、comparison_result）。
+  **历史例外**：2026-08-04 之前产出的 MISMATCH 耗尽记录缺 `ground_truth`
+  （generator best 分支漏传，已修复；convert 端有 original_sample 回退兜底）；
 - JSON 提取失败：有 cot_response，**无** predicted_json/comparison_result；
 - 纯网络失败（network_exhausted 等）：**只有** error/error_type（+ground_truth），
   无 cot_response/predicted_json——**这正是 convert 默认只读 success 文件的原因**；
@@ -138,7 +141,9 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 - **标签判读规则**：`"judge_result" in record` ⟺ 该记录被 judge 判过；
   `judge_result.overturned` ⟺ 被改判成功。下游可视化/过滤只看这个键；
 - merge_summary.json：run_success/run_failed/judged_overturned/judged_upheld/
-  judged_error/untouched_failed/orphaned/collision/final_success/final_failed；
+  judged_error/untouched_failed/orphaned/collision/final_success/final_failed
+  + duplicate_run_failed_ids/duplicate_judged_ids（2026-08-04 新增：
+  重复 sample_id 防御性计数，正常应均为 0）；
 - **反复 judge**：merged 目录可直接作为 judge 的 `--input` 再判一轮，
   再 merge 叠加（新 judge_result 覆盖旧块）。
 
@@ -181,7 +186,10 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
   `upheld`（默认，judge 维持原判=规则+模型双重确认）/ `mismatch`
   （有规则 diff 证据）/ `all`（任何带 GT dict 的记录，无 GT 的终态
   失败跳过）。**failed 的 cot_response/predicted_json 永不作训练目标**
-  （错误产物，拼「错误推理+正确答案」是负样本）；
+  （错误产物，拼「错误推理+正确答案」是负样本）。GT 优先取记录的
+  `ground_truth` 字段，缺失时**回退从 original_sample 提取**
+  （2026-08-04 新增：救修复前产出的缺 GT 旧记录；救回条数计入
+  convert_summary 的 `failed_gt_recovered`）；
 - **外部无 CoT 混入**（`--mix <shareGPT文件>`）：.json/.jsonl 均可，每条
   混入样本自动剥 `<think>`/`<thinking>` 推理段与已有 `<answer>` 包装、
   统一重包 `<answer>`（不双包）+ human 末尾加 `/no_think`；
@@ -200,8 +208,8 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 | `summary.json` | batch | 计数 + 完整 config + metrics（quota/outcomes/token_usage/performance）+ gt_analysis + quality | design.md §6 |
 | `judge_summary.json` | judge | 改判计数 + overturn_rate + config + metrics | design.md §6c |
 | `merge_summary.json` | merge | 合并计数对账 | §5 本文 |
-| `combine_summary.json` | combine | 多路径拼接计数（total_in/deduped/final_*） | design.md §6f |
-| `convert_summary.json` | convert | 转换计数 + mode/format | §6 本文 |
+| `combine_summary.json` | combine | 多路径拼接计数（total_in/deduped[路径内]/cross_path_id_collisions/final_*） | design.md §6f |
+| `convert_summary.json` | convert | 转换计数 + mode/format（含 failed_used/failed_gt_recovered/mixed_in） | §6 本文 |
 | `metrics.jsonl` | metrics | 逐请求事件流（ts/sample_id/kind/quota_kind/wait_limiter/wait_slot/rtt/backoff） | design.md §6b |
 
 ---

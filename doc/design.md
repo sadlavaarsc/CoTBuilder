@@ -255,6 +255,18 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     包裹**。不要为了让标签非空去拼接 predicted_json 或复述答案——
     假推理链进训练数据比没有推理链更糟。服务端是否返回
     reasoning_content 取决于部署（client 保留了完整 body，两条路都在）。
+22. **sample_id 只保证单 run 内唯一，跨路径不具区分度**：输入缺 `id`
+    时 batch 按位置补 `sample_{i}`——独立切分的多个 part 各自从
+    sample_0 编号，跨批 id 必然整批撞车（2026-08-04 下游汇报实证：
+    3×1000 条按裸 sample_id 去重被静默吞成 1000）。因此多路径合并
+    一律按 **(输入路径, sample_id)** 分键（combine.py）：路径内同 id
+    后赢的更新语义保留，跨路径同 id 视为不同样本全部保留。**不要**
+    在任何跨目录的合并/join 场景退回裸 sample_id 键；merge 的
+    judge↔run join 用裸 id 是安全的（同一 run 内 id 唯一），但也加了
+    重复 id 计数暴露（显式 id 输入可能自带重复）。配套约束：结果记录
+    的 `ground_truth` 字段在全部路径必填（2026-08-04 修复 MISMATCH
+    耗尽分支漏传），消费端（convert）另有 original_sample 回退兜底
+    救旧数据——两条防线都不要拆。
 
 ## 6. 内建指标（观测口径）
 
@@ -363,7 +375,9 @@ python -m cotbuilder.merge --run <run目录> --judge <judge目录> \
   已有字段**——judge_result 块的存在即「被判过」标签（见 §5.20）；
 - **只 join 不加工**：按 sample_id join、按 status 路由；orphaned
   （judge 有 run 无）跳过、collision（与 run success 撞 id）以 run 为准，
-  均计数进 merge_summary.json 对账；
+  均计数进 merge_summary.json 对账；重复 id 防御性计数
+  （duplicate_run_failed_ids / duplicate_judged_ids，2026-08-04，
+  单 run 内 id 由构造保证唯一，正常应均为 0，§5.22）；
 - **反复 judge 循环**：merged 目录的 failed_samples.json 可直接作 judge
   --input 再判一轮，再 merge 叠加（新 judge_result 覆盖旧块）；
 - 原子落盘（tmp + os.replace，仿 writer._full_rewrite），无 checkpoint
@@ -404,7 +418,9 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
   它是模型真实失败分布的 hard example mining）。failed 派生 =
   /no_think + GT 答案；档位 upheld（双重确认最干净，默认）/ mismatch
   / all。**failed 的 cot_response/predicted_json 永不作训练目标**
-  （与 §5.21 同原则：错误推理拼正确答案是负样本）；
+  （与 §5.21 同原则：错误推理拼正确答案是负样本）。GT 优先取
+  `ground_truth` 字段，缺失时回退 original_sample 提取（2026-08-04：
+  救修复前 best 分支漏传的旧记录，救回数计 failed_gt_recovered）；
 - extractor 新增 find_json_span（纯加法，extract_json 改为委托它，
   行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
   共用同一份平衡括号扫描。
@@ -424,11 +440,17 @@ python -m cotbuilder.combine --inputs <run1目录> <judge目录> <extra.json> \
 
 - **与 merge.py 的分工**：merge = judge↔run 的语义合并（两目录 join、
   翻转+搬移+标签）；combine = 任意多路径拼接去重，**不解读记录内容**；
-- **去重后赢**：同一 sample_id 以最后出现的输入路径为准（后面的视为
-  更新），顺序按首次出现；无 sample_id 记录无法去重全部保留并计数；
+- **按 (输入路径, sample_id) 分键去重（2026-08-04 修订）**：同一
+  路径内同 id 以最后出现为准（更新语义保留）；**跨路径同 id 视为
+  不同样本全部保留**——sample_id 只保证单 run 内唯一（缺 id 时按
+  位置补 sample_{i}，独立切分的 part 必然撞车），裸 id 去重会把多批
+  数据静默吞掉（§5.22）。撞 id 计数 `cross_path_id_collisions` 暴露
+  在 summary 并 warning（下游 judge checkpoint 按裸 id 判重会跳过
+  重复 id 的后者）；无 sample_id 记录无法去重全部保留并计数；
 - 目录输入读 success+failed 两个文件（缺文件按空 + warning），文件
   输入直读；输出按 status 路由写 success/failed_samples.json +
-  combine_summary.json 对账（total_in/deduped/no_sample_id/final_*）。
+  combine_summary.json 对账（total_in/deduped[路径内]/
+  cross_path_id_collisions/no_sample_id/final_*）。
 
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 

@@ -211,7 +211,8 @@ class SampleProcessor:
                 error=(f"Failed to match within "
                        f"{self._config.max_sample_attempts} attempts, "
                        f"best level: {verdict.level}"),
-                error_type="MISMATCH")
+                error_type="MISMATCH",
+                ground_truth=ground_truth)
         return self._build_result(
             sample_id, sample, status="failed", attempts=attempts,
             error=f"All attempts failed, last error: {last_error}",

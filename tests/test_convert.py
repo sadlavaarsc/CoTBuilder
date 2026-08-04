@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from cotbuilder.convert import run_convert, to_sharegpt
+from cotbuilder.convert import failed_to_sharegpt, run_convert, to_sharegpt
 
 GT = {"发票号码": "J123", "总价": "¥5.83"}
 GT_JSON = json.dumps(GT, ensure_ascii=False, indent=2)
@@ -282,8 +282,52 @@ def failed_rec(sid, kind):
         for k in ("cot_response", "predicted_json",
                   "ground_truth", "comparison_result"):
             del rec[k]
+        # original_sample 的 GT 文本也抹掉——无 GT 可供回退提取
+        rec["original_sample"]["messages"][1]["content"] = "not json"
         rec["error_type"] = "LENGTH_TRUNCATED"
+    elif kind == "no_gt_field":
+        # 2026-08-04 修复前的受损记录：无 ground_truth 字段，
+        # 但 original_sample 里 GT 文本完整（convert 回退可救）
+        del rec["ground_truth"]
     return rec
+
+
+class TestFailedGtFallback:
+    """2026-08-04 Bug① 修复：ground_truth 字段缺失时从 original_sample
+    回退提取 GT（救修复前产出的旧记录；两处都无 GT 才跳过）。"""
+
+    def test_fallback_from_original_sample_messages(self):
+        """无 ground_truth 字段、original_sample 为 messages 格式 → 回退救回。"""
+        rec = failed_rec("x1", "no_gt_field")
+        sample = failed_to_sharegpt(rec)
+        assert sample is not None
+        assert sample["conversations"][1]["value"] == GT_ANSWER
+        assert sample["conversations"][0]["value"].endswith("\n/no_think")
+
+    def test_fallback_from_original_sample_conversations(self):
+        """conversations 格式 original_sample 同样可回退。"""
+        rec = failed_rec("x2", "no_gt_field")
+        rec["original_sample"] = {
+            "id": "x2",
+            "conversations": [{"from": "human", "value": "<image>\n提取"},
+                              {"from": "gpt", "value": GT_INLINE}],
+            "images": ["/tmp/f.jpg"]}
+        sample = failed_to_sharegpt(rec)
+        assert sample is not None
+        assert sample["conversations"][1]["value"] == GT_ANSWER
+
+    def test_no_gt_anywhere_still_skipped(self):
+        """两处都无 GT（original_sample GT 文本也不可解析）→ None 不变。"""
+        assert failed_to_sharegpt(failed_rec("x3", "no_gt")) is None
+
+    def test_recovered_counted_in_summary(self, tmp_path):
+        """回退救回的条数计入 convert_summary.failed_gt_recovered。"""
+        input_dir, _ = TestIncludeFailed()._setup(tmp_path, [
+            failed_rec("u1", "no_gt_field"), failed_rec("u2", "upheld")])
+        summary = run_convert(input_dir, str(tmp_path / "t.json"),
+                              include_failed="all", mix_ratio=10.0)
+        assert summary["failed_used"] == 2
+        assert summary["failed_gt_recovered"] == 1   # u1 回退救回，u2 自带 GT
 
 
 class TestIncludeFailed:

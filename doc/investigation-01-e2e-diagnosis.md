@@ -458,3 +458,24 @@ scored/unscored 计数，看平均 KV 质量而不只是完美样本）。
 - **关联**：追加七（ground_truth 缺失）同为「暂挂的下游汇报」，
   处理时建议一并排期；formats.md §5/§7 与 design.md §6f 的
   combine 语义描述在结论落地后需同步修订。
+
+### 2026-08-04（九）｜ 追加七/八两条下游汇报：核实属实，已修复
+
+- **追加七（ground_truth 漏传）**：属实。`generator._exhausted_result`
+  best 分支确实漏传 `ground_truth`，`_build_result` 非 None 才写键 →
+  MISMATCH 耗尽记录缺 GT → convert `failed_to_sharegpt` 无 GT dict
+  直接跳过。**修复**：① generator best 分支补传（一行，新产出根治）；
+  ② convert 增加从 original_sample 回退提取 GT（旧数据消费端自愈，
+  救回数计 convert_summary.failed_gt_recovered）。
+- **追加八（combine 丢数据）**：现象属实，归因修正——「同 id 后赢」
+  本身是同批次更新链的正确语义，真正的坑是 **sample_id 只保证单
+  run 内唯一**（缺 id 时 batch 按位置补 sample_{i}，独立切分的 part
+  各自从 sample_0 编号，跨批整批撞车）。**修复**（用户拍板按路径
+  区分）：combine 去重键改 (输入路径, sample_id)——路径内后赢不变，
+  跨路径同 id 全保留，撞车数计 cross_path_id_collisions 并 warning
+  （judge checkpoint 按裸 id 判重的残余风险）。merge 的 judge↔run
+  join 用裸 id 安全（同 run 内唯一），另加重复 id 防御性计数
+  （duplicate_run_failed_ids / duplicate_judged_ids）。
+- 测试 253 → 261（+8：generator GT 断言、convert 回退 ×4、combine
+  跨路径保留与三 part 案例复现、merge 重复 id 计数）；防误解清单
+  新增 §5.22（sample_id 唯一性范围 + ground_truth 双防线）。
