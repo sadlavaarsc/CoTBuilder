@@ -28,18 +28,24 @@ train.json（训练框架直接读）
 # 环境（uv 或 venv 均可；pip 源建议清华镜像）
 uv venv .venv && .venv/bin/pip install aiohttp pytest pytest-asyncio
 
-# 跑测试（全部 mock，不触真实 API；253 项 + 2 项 slow 冒烟）
+# 跑测试（全部 mock，不触真实 API；286 项 + 2 项 slow 冒烟）
 .venv/bin/python -m pytest tests/ -q
 
-# 生产闭环（推荐参数，详见 doc/workflow.md）
+# 最短闭环：① 生成（含自动比对筛选，中断重跑同命令即续跑）② 转训练格式
 python -m cotbuilder.cli --input samples.json --output run1/ \
     --api-key <key> --qpm-limit 40 --max-concurrent 25
+python -m cotbuilder.convert --input run1/ --output train.json
+
+# 可选增强（① 之后 ② 之前）：judge 改判多救 10–30% 样本；polish 润色推理链
 python -m cotbuilder.judge --input run1/ --output judge1/ --api-key <key> --qpm-limit 40
 python -m cotbuilder.merge --run run1/ --judge judge1/ --output merged1/
-python -m cotbuilder.convert --input merged1/ --output train.json \
-    --include-failed upheld --mix-ratio 1.0
+python -m cotbuilder.polish --input merged1/ --output polished1/ \
+    --api-key <key> --qpm-limit 40
+
+# 只要答案不要推理链（golden answer 提取）：convert 加 --gpt-mode json
 ```
 
+详细操作（含每步验收检查点、常见状况）见 [doc/workflow.md](doc/workflow.md)。
 输入样本格式（`messages` / `conversations` 两种，JSON 数组）见
 [doc/formats.md §1](doc/formats.md)；数据切分是上游职责，不在本项目范围。
 
