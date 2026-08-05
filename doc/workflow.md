@@ -8,13 +8,15 @@
 ```
 samples.json ─► ① cli 生成 ─► run/ ─► ② judge 改判 ─► judge/ ─► ③ merge ─► merged/
                                                                               │
-多批次：各批 merged/ ─► combine ─► combined/ ◄────────────────────────────────┘
-                                              │
-                                              ▼
-                                     ④ convert ─► train.json（训练框架）
+多批次：各批 merged/ ─► combine ─► combined/ ◄────────────────────────────────┤
+                                              │                               │
+                                              ▼                               │
+                                     ④ convert ─► train.json（训练框架）      │
+                                              ▲                               │
+                                     ⑤ polish/repair（可选，convert 前） ◄────┘
 ```
 
-① ② 触网（专家模型 API）；③ ④ 与 combine 纯离线，随便重跑。
+① ② ⑤ 触网（专家模型 API）；③ ④ 与 combine 纯离线，随便重跑。
 
 ## ① 生成（python -m cotbuilder.cli）
 
@@ -80,6 +82,32 @@ python -m cotbuilder.convert --input merged1/ --output train.json \
 - 容器默认 JSON 数组（对齐 13 万老数据微调输入）。
 
 **验收检查点**（convert_summary.json）：`converted + failed_used + mixed_in = total_samples`；`failed_used=0` 且跑过 judge → 检查 merged 目录是否真有 upheld 记录。抽查 train.json：`<think>` 覆盖率（= 服务端 reasoning_content 返回率的代理指标）、`/think` 与 `/no_think` 条数比例 ≈ 1:1。
+
+## ⑤ polish / repair 润色修复（可选，convert 前）
+
+```bash
+# polish：润色成功样本 CoT（试跑 20 条先抽查 polished_cot）
+python -m cotbuilder.polish --mode polish --input merged1/ \
+    --output polished1/ --api-key <key> --limit 20 --qpm-limit 40
+
+# 失败/弃用样本重试循环（answer_changed 一次定音，重试走新 output）
+python -m cotbuilder.polish --input polished1/failed_samples.json \
+    --output polished1_retry/ --api-key <key> --qpm-limit 40
+python -m cotbuilder.combine --inputs polished1/ polished1_retry/ \
+    --output polished1_final/
+
+# repair：按 GT 修 failed 样本 CoT（不做验证，产物靠抽查兜底）
+python -m cotbuilder.polish --mode repair --input merged1/ \
+    --output repaired1/ --api-key <key> --qpm-limit 40
+```
+
+convert 自动衔接：polish 输出目录直接作 convert `--input`，CoT 与答案
+自动优先 polished 版本（`polish_result.applied` 才生效），无需 merge。
+
+**验收检查点**（polish_summary.json）：`applied_rate` 留档（过低 →
+prompt 或模型问题，抽查 polished_cot）；`answer_changed` 占比过高 →
+模型润色时改动事实，考虑调低 temperature；抽查若干 applied 样本的
+polished_cot 对比原 cot_response（纠结收敛、事实不变）。
 
 ## 多批次：combine 汇总（可选）
 

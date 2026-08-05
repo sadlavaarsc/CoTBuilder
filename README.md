@@ -62,9 +62,10 @@ python -m cotbuilder.convert --input merged1/ --output train.json \
 cotbuilder/   新代码包（单模块单职责）
   config / ratelimit / client / extractor / matcher /
   generator / writer / metrics / batch / cli        —— 主流程
-  judge / merge / convert / combine                 —— 离线工具链
+  judge / polish                                    —— 触网后处理（改判 / 润色修复）
+  merge / convert / combine                         —— 纯离线工具链
 mock/         可配置 mock API（正常/网络错/403/空响应/超长尾延迟…）
-tests/        253 项指标测试，全部走 mock
+tests/        286 项指标测试，全部走 mock
 oldCode/      老版本参考实现（只读，不要修改）
 ```
 

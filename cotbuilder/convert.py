@@ -115,11 +115,11 @@ def _strip_fences(text: str) -> str:
 # ----------------------------------------------------------------------
 # 纯函数（可脱离文件单测）
 
-def _human_text(original_sample: Dict[str, Any]) -> str:
+def human_text(original_sample: Dict[str, Any]) -> str:
     """从 original_sample 取 human 轮文本（兼容 messages / conversations）。
 
     与 generator._build_messages 同一取值来源（generator.py:263-271）；
-    content 为多模态 parts 列表时拼接其中 text 段。
+    content 为多模态 parts 列表时拼接其中 text 段。polish.py 复用。
     """
     content: Any = ""
     messages = original_sample.get("messages")
@@ -134,12 +134,20 @@ def _human_text(original_sample: Dict[str, Any]) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _reasoning_text(record: Dict[str, Any]) -> str:
-    """回收推理链文本：reasoning_content 优先，回退 cot_response 剥离 JSON。
+def reasoning_text(record: Dict[str, Any]) -> str:
+    """回收推理链文本：polished → reasoning_content → cot_response 剥离。
 
-    两条路径都可能为空（服务端不回 reasoning_content 且 cot_response
-    只有 JSON）——返回空串，调用方不加 <thinking> 包裹。
+    优先级（2026-08-05 polish 衔接）：① record["polish_result"] applied
+    且有 polished_cot（polish.py 润色产物）；② full_api_response 的
+    reasoning_content；③ cot_response 剥离 JSON span。三条路都可能
+    为空——返回空串，调用方不加 <thinking> 包裹。
     """
+    polish = record.get("polish_result")
+    if isinstance(polish, dict) and polish.get("applied"):
+        polished_cot = polish.get("polished_cot")
+        if isinstance(polished_cot, str) and polished_cot.strip():
+            return polished_cot.strip()
+
     full = record.get("full_api_response") or {}
     try:
         reasoning = full["choices"][0]["message"]["reasoning_content"]
@@ -157,6 +165,11 @@ def _reasoning_text(record: Dict[str, Any]) -> str:
         return cot.strip()
     text = cot[:span[0]] + cot[span[1]:]
     return _FENCE_RE.sub("", text).strip()
+
+
+# 私有别名（模块内既有调用点与外部旧引用兼容）
+_human_text = human_text
+_reasoning_text = reasoning_text
 
 
 def to_sharegpt(record: Dict[str, Any], mode: str = "thinking",
@@ -184,7 +197,13 @@ def to_sharegpt(record: Dict[str, Any], mode: str = "thinking",
             answer = _strip_fences(answer)
         has_thinking = True   # raw 保留推理原文 → 语义上含推理
     else:
+        # 答案优先级：polish_result.applied 的 polished_answer（polish/
+        # repair 润色产物，2026-08-05）→ predicted_json
         predicted = record.get("predicted_json")
+        polish = record.get("polish_result")
+        if (isinstance(polish, dict) and polish.get("applied")
+                and isinstance(polish.get("polished_answer"), dict)):
+            predicted = polish["polished_answer"]
         if predicted is None:
             return None
         answer_json = _wrap_tag(
@@ -265,13 +284,14 @@ def _failed_eligible(record: Dict[str, Any], source: str) -> bool:
     return True   # all
 
 
-def _gt_from_original_sample(original: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def gt_from_original_sample(original: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从 original_sample 回退提取 GT dict（两格式取值 + extract_json）。
 
     复刻 generator._gt_text 的取值逻辑（不 import generator——本工具保持
     离线自包含）。用途：修复前产出的 MISMATCH 耗尽记录缺 ground_truth
     字段（generator best 分支漏传，2026-08-04 修复），但 original_sample
-    里永远带着 GT 文本，消费端可自愈，旧数据无需重跑。
+    里永远带着 GT 文本，消费端可自愈，旧数据无需重跑。polish.py 的
+    repair 模式复用。
     """
     if "messages" in original and len(original.get("messages", [])) > 1:
         gt_text = original["messages"][1].get("content", "")
@@ -279,6 +299,9 @@ def _gt_from_original_sample(original: Dict[str, Any]) -> Optional[Dict[str, Any
         convs = original.get("conversations", [{}, {}])
         gt_text = convs[1].get("value", "") if len(convs) > 1 else ""
     return extract_json(gt_text) if gt_text else None
+
+
+_gt_from_original_sample = gt_from_original_sample   # 私有别名
 
 
 def failed_to_sharegpt(record: Dict[str, Any],

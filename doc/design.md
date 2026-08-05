@@ -267,6 +267,16 @@ unify_currency_extended / type_insensitive / trim_empty_fields`。
     的 `ground_truth` 字段在全部路径必填（2026-08-04 修复 MISMATCH
     耗尽分支漏传），消费端（convert）另有 original_sample 回退兜底
     救旧数据——两条防线都不要拆。
+23. **polish 比的是「同一次调用的 answer」，不是 GT；repair 不做
+    验证**：polish 模式的一致性校验是 polished answer vs 原
+    predicted_json（Matcher STRICT，§6g）——目的是「没改原意」，
+    拿 GT 比会把 polish 变成隐性 repair，污染口径。repair 模式按
+    用户拍板完全不做验证（可靠性无法保证），其产物靠
+    `polish_result.mode="repair"` 标签溯源、下游抽查兜底——**不要**
+    给 repair 悄悄加验证逻辑伪装可靠性。两个模式都遵守标签块原则：
+    不改原记录任何字段（§5.20），applied=false 的 polished 文本
+    也留存供抽查，重试走 failed 文件 + 新 output 循环（同反复
+    judge），不要在样本内对 answer_changed 做隐式重试。
 
 ## 6. 内建指标（观测口径）
 
@@ -423,7 +433,11 @@ python -m cotbuilder.convert --input <合并目录> --output train.json
   救修复前 best 分支漏传的旧记录，救回数计 failed_gt_recovered）；
 - extractor 新增 find_json_span（纯加法，extract_json 改为委托它，
   行为不变）——cot_response 的「推理链 / JSON 答案」切分与主流程提取
-  共用同一份平衡括号扫描。
+  共用同一份平衡括号扫描；
+- **polish 衔接（2026-08-05）**：reasoning_text 与 thinking/json 模式
+  的答案构造自动优先 polish_result（applied）的 polished_cot /
+  polished_answer → 原回收路径（§6g）；human_text / reasoning_text /
+  gt_from_original_sample 为公开 helper（polish.py 复用）。
 
 ## 6f. 多路径结果合并工具（combine.py，2026-08-03 新增）
 
@@ -452,6 +466,51 @@ python -m cotbuilder.combine --inputs <run1目录> <judge目录> <extra.json> \
   combine_summary.json 对账（total_in/deduped[路径内]/
   cross_path_id_collisions/no_sample_id/final_*）。
 
+## 6g. CoT 润色/修复工具（polish.py，2026-08-05 新增）
+
+**定位**：触网后处理工具（骨架镜像 judge.py：同一 client/限流/退避/
+writer/checkpoint/CLI），收敛 thinking 模型 CoT 的反复纠结与冗余。
+**不在正常工作流内**。
+
+```bash
+# polish：润色成功样本 CoT（读 success_samples.json），答案一致性校验
+python -m cotbuilder.polish --mode polish --input merged1/ \
+    --output polished1/ --api-key <key> --limit 20 --qpm-limit 40
+# repair：按 GT 修 failed 样本 CoT（读 failed_samples.json），不验证
+python -m cotbuilder.polish --mode repair --input merged1/ \
+    --output repaired1/ --api-key <key> --qpm-limit 40
+# 失败重试循环（answer_changed/失败记录 → failed_samples.json 再喂一轮）
+python -m cotbuilder.polish --input polished1/failed_samples.json \
+    --output polished1_retry/ --api-key <key> --qpm-limit 40
+python -m cotbuilder.combine --inputs polished1/ polished1_retry/ \
+    --output polished1_final/
+```
+
+设计决策：
+
+- **polish 模式**：只给模型看「原始问题 + CoT 文本」（纯文本不看图、
+  不给 GT），输出 {"cot", "answer"}；**一致性比的是同一次调用的原
+  predicted_json，不是 GT**（比「有没有改原意」，Matcher STRICT 口径、
+  is_accepted 与主流程验收同口径）；不一致 → applied=false 保留原文
+  （**一次定音不做样本内重试**，polished 文本留存供抽查，重试走
+  failed 文件 + 新 output 的循环路径，与反复 judge 同模式）；
+- **repair 模式**：连问题 + 原 CoT + GT 丢给模型修，**不做任何验证**
+  （可靠性本就无法保证，2026-08-05 用户拍板）；applied 记录 status
+  翻 success + `polish_result.mode="repair"` 标签可溯源；
+- **prompt 规则化 + few-shot**（用户调研结论，不写笼统「润色」）：
+  反复纠结只保留第一次提出与最终结论（带例如）、删语气词、事实与
+  答案不得改动、语言与原文一致；
+- 标签块原则同 §5.20：**不改原记录任何字段**，polish_result 块
+  {mode, applied, attempts, polished_cot, polished_answer,
+  match_level?, content, error?, failure?} 即标签；applied →
+  success_samples.json，其余 → failed_samples.json；
+- convert 自动衔接：CoT 优先级 polished_cot → reasoning_content →
+  cot_response 剥离；答案优先级 polished_answer → predicted_json
+  （repair 的答案是被修过的，必须走这条路）——run → polish →
+  convert 直接串，无需 merge；
+- 寿命循环与 judge 相同：网络类退避重试烧 network_max_attempts；
+  终态/answer_changed/parse_failed 不重试。
+
 ## 7. 如何跑测试（全部走 mock，不触真实 API）
 
 ```bash
@@ -469,7 +528,7 @@ python -m pytest tests/ -v -m slow    # 近真实尺度冒烟（真实 qpm=50、
 | 纯单元（fake clock/rng） | test_ratelimit / test_matcher / test_extractor | 限流不变量、退避分布、归一化正反例、JSON 提取 |
 | 组件集成（mock server） | test_client / test_generator / test_writer | 并发上限、paced、错误分类、寿命语义、断点恢复 |
 | 端到端指标 | test_batch / test_degraded | 请求数守恒、时间包络、并发不劣化、403 风暴恢复、降级场景（网络抖动致有效 QPM 略降）、兼容与口径 |
-| 后处理工具 | test_judge / test_merge / test_convert | judge 改判（mock server）；merge/convert 纯离线纯函数 + tmp_path 文件断言（无 mock） |
+| 后处理工具 | test_judge / test_merge / test_convert / test_combine / test_polish | judge 改判（mock server）；merge/convert/combine 纯离线纯函数 + tmp_path 文件断言（无 mock）；polish 纯函数 + FakeClient 脚本化（无 mock） |
 | 冒烟 | test_smoke（slow） | 真实量级 qpm=50 + 秒级延迟 |
 
 mock 时间尺度策略：延迟默认 (4,30)s 贴近实测 OK 分布（2026-07-29 e2e：

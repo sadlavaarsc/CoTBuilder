@@ -13,12 +13,13 @@
 > 更新 2026-08-03（四）：gpt 轮改 Qwen3 式 <think>/<answer> 双标签（全来源答案统一 <answer> 包裹，mix sanitize 剥旧标签后统一重包），test_convert.py 新增 1 项（+既有断言改写），总数 247 → **248**。
 > 更新 2026-08-03（五）：combine 多路径哑合并工具（combine.py），新增 tests/test_combine.py（5 项），总数 248 → **253**。
 > 更新 2026-08-04：两条下游汇报 bug 修复——generator MISMATCH 耗尽补传 ground_truth + convert original_sample GT 回退；combine 去重键改 (路径, sample_id)（跨路径同 id 全保留）；merge 重复 id 防御计数。test_generator +1 / test_convert +4 / test_combine +2（另有适配改写）/ test_merge +1，总数 253 → **261**。
+> 更新 2026-08-05：polish 润色/修复双模式工具（polish.py，镜像 judge 骨架）+ convert polish 衔接（polished_cot/polished_answer 自动优先），新增 tests/test_polish.py（21 项）+ test_convert.py +4，总数 261 → **286**。
 
 ## 总览
 
 | 套件 | 结果 | 耗时 |
 |---|---|---|
-| 全部指标测试（`pytest tests/`，slow 默认跳过） | **261 passed**，2 deselected | 44.5s |
+| 全部指标测试（`pytest tests/`，slow 默认跳过） | **286 passed**，2 deselected | 44.6s |
 | 近真实尺度冒烟（`pytest tests/ -m slow`） | **2 passed** | 23.9s |
 
 分文件明细：
@@ -39,9 +40,10 @@
 | test_judge.py | 14 | judge 改判：改判成功搬移/维持原判/无 diff 跳过/403 风暴重试/网络耗尽/终态不重试/verdict 不可解析/断点续判、apply_verdicts 保守规则纯函数、judge_pairs 提取 |
 | test_merge.py | 8 | judge 合并：翻转进 success 带标签且原字段不动、upheld/error 留 failed 细分、未覆盖原样无标签、orphaned/collision、文件对账、二次 merge 反复 judge 循环、重复 id 防御计数 |
 | test_combine.py | 7 | 多路径哑合并（(路径, id) 分键）：路径内后赢/跨路径同 id 全保留/三 part 撞车案例复现/无 id 全保留、目录+文件混合输入路由与对账、缺文件容错、输出可直接喂 convert |
-| test_convert.py | 28 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底、GT 回退提取（messages/conversations 两格式/无 GT 仍跳过/救回计数） |
+| test_convert.py | 32 | ShareGPT 转换：<think>/<answer> 双标签（reasoning_content 优先/cot 剥离回退/空 cot 仅 answer/自定义标签名）、raw 原文/json 纯 answer、human 两输入格式 + <image> 前置 + images 透传、缺素材跳过、json/jsonl 容器对账、strip-fences、think 标志按内容选择/自定义/去重、无CoT混入比例/超体量/jsonl 源/种子确定性/sanitize 剥旧标签统一重包不双包、failed 派生三档过滤/GT 答案不用 predicted/预算优先填充与 mix 补齐/超预算抽样/缺 failed 文件兜底、GT 回退提取（messages/conversations 两格式/无 GT 仍跳过/救回计数）、polish 衔接（applied 优先 polished_cot/polished_answer、unapplied 回落、repair 答案、json 模式） |
+| test_polish.py | 21 | polish/repair 双模式：material 提取（两格式/reasoning_content 优先/缺素材/旧 polish_result 忽略）、GT 回退、apply_polish 一致性（STRICT/NORMALIZED/answer_changed 留存/parse_failed）、repair 不验证、runner（一遍过/answer_changed 不重试/网络退避/终态/寿命耗尽/repair 翻 success/checkpoint 续跑/summary 对账/缺素材跳过） |
 | test_smoke.py（slow） | 2 | 真实 qpm=50 匀速性（间隔 ≥1.15s）、并发瓶颈验证 |
-| **合计** | **263** | |
+| **合计** | **288** | |
 
 ## 核心指标实测值
 
@@ -201,7 +203,7 @@
 
 ```bash
 cd /Users/liwentao/Documents/开发/CoTBuilder
-.venv/bin/python -m pytest tests/ -v            # 261 项指标测试（~45s）
+.venv/bin/python -m pytest tests/ -v            # 286 项指标测试（~45s）
 .venv/bin/python -m pytest tests/ -v -m slow    # 2 项近真实尺度冒烟（~26s）
 ```
 

@@ -16,6 +16,10 @@
                                      [merge 合并] ──► merged目录: 同名两文件 + merge_summary.json
                                               │
                                               ▼
+                                     [polish 润色/repair 修复]（可选）──► polish目录:
+                                              │    同名两文件 + polish_summary.json
+                                              │    （记录带 polish_result 标签块）
+                                              ▼
                                      [convert 转换] ──► train.json / train.jsonl（ShareGPT）
                                                           (+ convert_summary.json)
 ```
@@ -147,8 +151,37 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 - **反复 judge**：merged 目录可直接作为 judge 的 `--input` 再判一轮，
   再 merge 叠加（新 judge_result 覆盖旧块）。
 
-## 6. ShareGPT 训练数据（convert 输出，train.json / train.jsonl）
+## 5b. polish 输出（polish 目录，同名两文件 + polish_summary.json，2026-08-05）
 
+记录 = 原记录浅拷贝 + status 路由 + **polish_result 标签块**（原字段不动）：
+
+```json
+{
+  "...": "§2/§5 原字段全部保留（cot_response / full_api_response 不动）",
+  "status": "success",
+  "polish_result": {
+    "mode": "polish | repair",
+    "applied": true,
+    "attempts": 1,
+    "polished_cot": "修正后的推理过程",
+    "polished_answer": {"发票号码": "J123"},
+    "match_level": "STRICT",
+    "content": "<模型原始输出>",
+    "error": "...", "failure": "parse_failed | answer_changed(隐式) | network_exhausted | terminal_error"
+  }
+}
+```
+
+- `match_level` 仅 polish 模式有（与原 predicted_json 的一致性级别，
+  **不是与 GT 比**）；applied=false 时 polished_cot/polished_answer
+  也留存（抽查用），无 failure 键即 answer_changed；
+- 路由：applied → success_samples.json；其余 → failed_samples.json
+  （可直接作 --input 重跑一轮，新 --output 避开 checkpoint，再 combine 并回）；
+- polish_summary.json：mode/total_records/processed/applied/
+  answer_changed/parse_failed/network_exhausted/terminal_error/
+  skipped_no_material/skipped_resume/applied_rate + config + metrics。
+
+## 6. ShareGPT 训练数据（convert 输出，train.json / train.jsonl）
 ```json
 [
   {
@@ -170,7 +203,7 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 - gpt 轮三种 `--gpt-mode`：
   | mode | gpt value |
   |---|---|
-  | `thinking`（默认） | `<think>推理链</think>` + `<answer>{JSON}</answer>`；推理链取 `reasoning_content` → 回退 `cot_response` 剥离 JSON；为空则仅 `<answer>` |
+  | `thinking`（默认） | `<think>推理链</think>` + `<answer>{JSON}</answer>`；推理链取 polished_cot（polish_result applied）→ `reasoning_content` → `cot_response` 剥离 JSON；答案取 polished_answer → predicted_json；推理链为空则仅 `<answer>` |
   | `raw` | `cot_response` 原文不动（**不参与双标签提取契约**；`--strip-fences` 可删 ```json 围栏） |
   | `json` | 纯 `<answer>{JSON}</answer>`（无推理） |
 - **thinking 软开关标志**（2026-08-03 追加）：human 轮末尾按 gpt 轮**实际
@@ -210,6 +243,7 @@ JSON 数组，每条记录字段超集（generator._build_result，writer 原样
 | `merge_summary.json` | merge | 合并计数对账 | §5 本文 |
 | `combine_summary.json` | combine | 多路径拼接计数（total_in/deduped[路径内]/cross_path_id_collisions/final_*） | design.md §6f |
 | `convert_summary.json` | convert | 转换计数 + mode/format（含 failed_used/failed_gt_recovered/mixed_in） | §6 本文 |
+| `polish_summary.json` | polish | 润色/修复计数 + applied_rate + config + metrics | §5b 本文 |
 | `metrics.jsonl` | metrics | 逐请求事件流（ts/sample_id/kind/quota_kind/wait_limiter/wait_slot/rtt/backoff） | design.md §6b |
 
 ---

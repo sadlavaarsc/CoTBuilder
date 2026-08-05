@@ -330,6 +330,50 @@ class TestFailedGtFallback:
         assert summary["failed_gt_recovered"] == 1   # u1 回退救回，u2 自带 GT
 
 
+class TestPolishIntegration:
+    """polish 衔接（2026-08-05）：applied 的 polish_result 优先于原回收
+    路径（CoT 与答案都是）；applied=false 回落原路径。"""
+
+    @staticmethod
+    def _tag(rec, applied, cot="润色后的推理", answer=None):
+        rec["polish_result"] = {"mode": "polish", "applied": applied,
+                                "polished_cot": cot, "attempts": 1}
+        if answer is not None:
+            rec["polish_result"]["polished_answer"] = answer
+        return rec
+
+    def test_applied_polish_preferred(self):
+        """applied：gpt = <think>polished_cot</think> + polished 路径 CoT。"""
+        rec = self._tag(make_record(), True)
+        gpt = to_sharegpt(rec)["conversations"][1]["value"]
+        assert gpt.startswith("<think>润色后的推理</think>")
+        assert COT_TEXT not in gpt                 # 原 CoT 不再使用
+
+    def test_repair_answer_preferred_over_predicted(self):
+        """repair 记录：polished_answer ≠ predicted_json 时用 polished。"""
+        repaired = {"发票号码": "J123", "总价": "¥9.99"}
+        rec = self._tag(make_record(predicted={"发票号码": "J123",
+                                               "总价": "WRONG"}),
+                        True, answer=repaired)
+        rec["polish_result"]["mode"] = "repair"
+        gpt = to_sharegpt(rec)["conversations"][1]["value"]
+        assert "¥9.99" in gpt and "WRONG" not in gpt
+
+    def test_unapplied_polish_ignored(self):
+        """applied=false（answer_changed）：回落原 CoT / predicted_json。"""
+        rec = self._tag(make_record(), False,
+                        answer={"发票号码": "J999", "总价": "¥5.83"})
+        gpt = to_sharegpt(rec)["conversations"][1]["value"]
+        assert COT_TEXT in gpt                     # 原 CoT
+        assert "J999" not in gpt                   # polished_answer 不用
+
+    def test_json_mode_also_prefers_polished_answer(self):
+        repaired = {"发票号码": "J123", "总价": "¥9.99"}
+        rec = self._tag(make_record(), True, answer=repaired)
+        gpt = to_sharegpt(rec, mode="json")["conversations"][1]["value"]
+        assert "¥9.99" in gpt
+
+
 class TestIncludeFailed:
     def _setup(self, tmp_path, failed_records, n_cot=3, with_mix=5):
         d = tmp_path / "merged"
